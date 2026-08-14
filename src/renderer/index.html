@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'" />
+  <title>Margo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Titlebar -->
+  <header class="titlebar" id="titlebar">
+    <div class="titlebar-left">
+      <button class="brand-btn" id="btn-home" title="Home">
+        <img class="brand-mascot" id="brand-mascot" src="../../assets/icon.png" width="20" height="20" alt="" />
+        <span class="brand-name">Margo</span>
+      </button>
+      <div class="doc-chip hidden" id="doc-chip">
+        <span class="doc-kind-dot" id="doc-kind-dot"></span>
+        <span class="doc-name" id="doc-name">Untitled</span>
+        <span class="doc-dirty hidden" id="doc-dirty" title="Unsaved changes"></span>
+        <span class="doc-badge" id="doc-badge">MD</span>
+      </div>
+    </div>
+    <div class="titlebar-right">
+      <button type="button" class="account-btn" id="btn-account" title="Google account" aria-label="Google account">
+        <span class="account-avatar" id="account-avatar"></span>
+      </button>
+      <div class="account-menu hidden" id="account-menu" role="menu"></div>
+    </div>
+    <div class="titlebar-overlay-space"></div>
+  </header>
+
+  <!-- Menu bar -->
+  <nav id="menubar" class="menubar" aria-label="Application menu"></nav>
+  <div id="tab-bar" class="tab-bar hidden"></div>
+
+  <div class="shell" id="shell">
+    <!-- hover strip that reveals the sidebar when it is unpinned -->
+    <div class="side-hotzone" id="side-hotzone"></div>
+    <!-- Sidebar library -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-actions">
+        <div class="side-actions-row">
+          <button class="btn primary side-open" id="btn-open-file">Open file…</button>
+          <button class="icon-btn side-pin" id="btn-pin-sidebar" title="Pin sidebar"></button>
+        </div>
+        <div class="side-new-row">
+          <button class="side-new" data-new="md" title="New Markdown note">
+            <span class="side-new-icon icon-md"></span><span>Markdown</span>
+          </button>
+          <button class="side-new" data-new="doc" title="New Word document">
+            <span class="side-new-icon icon-doc"></span><span>Document</span>
+          </button>
+          <button class="side-new" data-new="sheet" title="New spreadsheet">
+            <span class="side-new-icon icon-sheet"></span><span>Sheet</span>
+          </button>
+          <button class="side-new" data-new="pdf" title="New PDF document">
+            <span class="side-new-icon icon-pdf"></span><span>PDF</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-head">
+          <span>Recents</span>
+          <button class="link-btn hidden" id="btn-clear-recents">Clear</button>
+        </div>
+        <div class="side-list" id="recents-grid">
+          <div class="side-empty" id="side-empty">Files you open or save appear here, with a preview of their first page.</div>
+        </div>
+      </div>
+
+      <div class="side-footer">
+        <button class="link-btn" id="btn-shortcuts">Shortcuts</button>
+      </div>
+    </aside>
+
+    <!-- Main area -->
+    <main class="main">
+      <section class="view view-home" id="view-landing">
+        <div class="empty">
+          <img class="empty-mascot" id="hero-mascot" src="../../assets/icon.png" width="76" height="76" alt="" />
+          <h1 class="empty-title">Margo</h1>
+          <p class="empty-sub">Hover the left edge for your library, use the File menu, or drop a file anywhere.</p>
+          <p class="empty-exts">.md&ensp;·&ensp;.docx&ensp;·&ensp;.xlsx&ensp;·&ensp;.csv&ensp;·&ensp;.pdf</p>
+        </div>
+      </section>
+
+      <section class="view view-editor hidden" id="view-editor">
+        <div id="tab-panes"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-backdrop hidden" id="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3 class="modal-title" id="modal-title"></h3>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toast-wrap"></div>
+
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="themes.js"></script>
+  <script src="menubar.js"></script>
+  <script src="thumbs.js"></script>
+  <script src="editors/markdown.js"></script>
+  <script src="editors/richtext.js"></script>
+  <script src="editors/sheet.js"></script>
+  <script src="editors/pdfview.js"></script>
+  <script src="app.js"></script>
+  <script src="smoke-ui.js"></script>
+</body>
+</html>

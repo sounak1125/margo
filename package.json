@@ -1,0 +1,112 @@
+{
+  "name": "margo",
+  "productName": "Margo",
+  "version": "1.0.0",
+  "description": "Margo",
+  "main": "main.js",
+  "author": "Sounak",
+  "license": "MIT",
+  "repository": "github:sounak1125/margo",
+  "scripts": {
+    "start": "node scripts/stamp-electron-icon.js && electron .",
+    "test": "node scripts/stamp-electron-icon.js && set MARGO_SMOKE=1&& electron .",
+    "icons": "node scripts/make-icons.js",
+    "check:desktop-thumbs": "node scripts/check-desktop-thumbs.js",
+    "predist": "node scripts/write-google-oauth.js",
+    "dist": "electron-builder",
+    "dist:publish": "electron-builder --publish always"
+  },
+  "dependencies": {
+    "dompurify": "^3.1.6",
+    "electron-updater": "^6.8.9",
+    "exceljs": "^4.4.0",
+    "google-auth-library": "^11.0.2",
+    "html-to-docx": "^1.8.0",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.8.0",
+    "marked": "^12.0.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^3.11.174",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "electron": "^36.0.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.35.3"
+  },
+  "build": {
+    "appId": "com.sounak.margo",
+    "productName": "Margo",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "assets/**",
+      "samples/welcome.md",
+      "!node_modules/pdfjs-dist/**",
+      "!node_modules/pdf-lib/**",
+      "!node_modules/dompurify/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "sounak1125",
+      "repo": "margo",
+      "releaseType": "release"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "txt"
+        ],
+        "name": "MargoMarkdown",
+        "description": "Markdown document",
+        "icon": "file-icons/md.ico",
+        "role": "Editor"
+      },
+      {
+        "ext": "docx",
+        "name": "MargoWordDocument",
+        "description": "Word document",
+        "icon": "file-icons/doc.ico",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "xlsx",
+          "csv"
+        ],
+        "name": "MargoSpreadsheet",
+        "description": "Spreadsheet",
+        "icon": "file-icons/sheet.ico",
+        "role": "Editor"
+      },
+      {
+        "ext": "pdf",
+        "name": "MargoPDF",
+        "description": "PDF document",
+        "icon": "file-icons/pdf.ico",
+        "role": "Viewer"
+      }
+    ]
+  }
+}
