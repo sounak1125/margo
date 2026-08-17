@@ -232,6 +232,10 @@
       t('sheet tabs render', document.querySelectorAll('.tab-pane:not([hidden]) .sheet-tab').length === 2
         || document.querySelectorAll('.sheet-tab').length === 2);
       t('sheet ribbon renders 5 tabs', document.querySelectorAll('.sheet-ribbon-tab').length === 5);
+      t('sheet font toolbar present',
+        !!(document.querySelector('.tab-pane:not([hidden]) .tb-select.tb-font')
+          && document.querySelector('.tab-pane:not([hidden]) .tb-select.tb-font-variant')
+          && document.querySelector('.tab-pane:not([hidden]) .tb-select.tb-size')));
       const sheetMenubar = document.getElementById('menubar');
       const sheetMenuTops = document.querySelectorAll('#menubar .menu-top');
       const sheetMenuCs = sheetMenubar && getComputedStyle(sheetMenubar);

@@ -43,6 +43,8 @@
     let findOpen = false, findHits = [], findIndex = -1;
     let textIndex = [];
     let textIndexPromise = null;
+    const history = window.MargoHistory.create();
+    let skipHistory = false;
 
     const dpr = () => Math.min(window.devicePixelRatio || 1, 2.5);
 
@@ -331,7 +333,35 @@
       img.src = dataUrl;
     }
 
-    function addPlacement(pl) {
+    function capturePlacements() {
+      return placements.map((p) => ({
+        pageIndex: p.pageIndex,
+        xr: p.xr, yr: p.yr, wr: p.wr, hr: p.hr,
+        dataUrl: p.dataUrl
+      }));
+    }
+    function recordPlacements() {
+      if (skipHistory || history.isApplying()) return;
+      history.record(capturePlacements());
+    }
+    function clearPlacementEls() {
+      pageViews.forEach((pv) => {
+        if (!pv.overlay) return;
+        pv.overlay.querySelectorAll('.sig-placed').forEach((el) => el.remove());
+      });
+    }
+    function restorePlacements(snap) {
+      skipHistory = true;
+      clearPlacementEls();
+      placements = [];
+      (Array.isArray(snap) ? snap : []).forEach((pl) => addPlacement(pl, true));
+      skipHistory = false;
+      updateStatus();
+    }
+    function undo() { history.undo(restorePlacements); }
+    function redo() { history.redo(restorePlacements); }
+
+    function addPlacement(pl, silent) {
       const pv = pageViews[pl.pageIndex];
       if (!pv || !pv.overlay) return;
       placements.push(pl);
@@ -347,11 +377,45 @@
         el.remove();
         ctx.markDirty();
         updateStatus();
+        recordPlacements();
+      });
+      let drag = null;
+      el.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.sig-no')) return;
+        const pvNow = pageViews[pl.pageIndex];
+        if (!pvNow || !pvNow.el) return;
+        drag = { sx: e.clientX, sy: e.clientY, ox: pl.xr, oy: pl.yr, moved: false };
+        el.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      el.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        const pvNow = pageViews[pl.pageIndex];
+        if (!pvNow || !pvNow.el) return;
+        const dx = (e.clientX - drag.sx) / Math.max(1, pvNow.el.clientWidth);
+        const dy = (e.clientY - drag.sy) / Math.max(1, pvNow.el.clientHeight);
+        if (Math.abs(dx) > 0.002 || Math.abs(dy) > 0.002) drag.moved = true;
+        pl.xr = Math.max(0, Math.min(1 - pl.wr, drag.ox + dx));
+        pl.yr = Math.max(0, Math.min(1 - pl.hr, drag.oy + dy));
+        el.style.left = (pl.xr * 100) + '%';
+        el.style.top = (pl.yr * 100) + '%';
+      });
+      el.addEventListener('pointerup', () => {
+        if (drag && drag.moved) {
+          ctx.markDirty();
+          recordPlacements();
+        }
+        drag = null;
       });
       pv.overlay.appendChild(el);
+      if (silent) {
+        updateStatus();
+        return;
+      }
       ctx.markDirty();
       updateStatus();
       ctx.toast('Signature added — Save to make it permanent');
+      recordPlacements();
     }
 
     /* ---------------- image extraction ---------------- */
@@ -711,10 +775,13 @@
         host.addEventListener('keydown', onHostKeydown);
         await loadDocument(bytes);
         if (Array.isArray(doc.placements)) {
+          skipHistory = true;
           for (const pl of doc.placements) {
-            if (pl && typeof pl.pageIndex === 'number' && pl.dataUrl) addPlacement(pl);
+            if (pl && typeof pl.pageIndex === 'number' && pl.dataUrl) addPlacement(pl, true);
           }
+          skipHistory = false;
         }
+        history.seed(capturePlacements());
         findBar = null;
         ensureFindBar();
       },
@@ -752,9 +819,14 @@
         bytes = toBytes(data.bytes);
         placements = [];
         await loadDocument(bytes);
+        history.seed(capturePlacements());
       },
       focus() { scroll && scroll.focus(); },
       commands: {
+        undo,
+        redo,
+        canUndo: () => history.canUndo(),
+        canRedo: () => history.canRedo(),
         zoomIn: () => zoomBy(1.2),
         zoomOut: () => zoomBy(1 / 1.2),
         zoomReset: () => { zoom = 1; applyScale(); },

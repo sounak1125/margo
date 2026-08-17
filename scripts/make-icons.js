@@ -108,34 +108,74 @@ async function resizePng(src, size) {
     .toBuffer();
 }
 
-function fileTypeSvg(accent, soft, label) {
+function pagePath() {
+  return 'M58 28h92l44 44v140a18 18 0 0 1-18 18H58a18 18 0 0 1-18-18V46a18 18 0 0 1 18-18z';
+}
+
+function fileTypeSvg(kind) {
+  if (kind === 'md') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#F6C445"/>
+  <path d="${pagePath()}" fill="#FFFDF6" stroke="#E2C56A" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#E2C56A" stroke-width="4"/>
+  <path d="M88 86h-14v84h18V128l16 28 16-28v42h18V86h-18l-16 32-16-32z" fill="#5A4300"/>
+  <rect x="72" y="188" width="72" height="28" rx="8" fill="#5A4300"/>
+  <text x="108" y="208" text-anchor="middle" fill="#FFFDF6" font-size="16" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">MD</text>
+</svg>`;
+  }
+  if (kind === 'doc') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#2B579A"/>
+  <path d="${pagePath()}" fill="#F7FAFF" stroke="#9BB6DE" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#9BB6DE" stroke-width="4"/>
+  <rect x="78" y="92" width="92" height="10" rx="5" fill="#2B579A"/>
+  <rect x="78" y="114" width="78" height="10" rx="5" fill="#8AA6D4"/>
+  <rect x="78" y="136" width="86" height="10" rx="5" fill="#8AA6D4"/>
+  <rect x="78" y="158" width="64" height="10" rx="5" fill="#8AA6D4"/>
+  <rect x="70" y="182" width="56" height="40" rx="10" fill="#2B579A"/>
+  <text x="98" y="211" text-anchor="middle" fill="#FFFFFF" font-size="28" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">W</text>
+</svg>`;
+  }
+  if (kind === 'sheet') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#217346"/>
+  <path d="${pagePath()}" fill="#F4FBF7" stroke="#8FCBAB" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#8FCBAB" stroke-width="4"/>
+  <g transform="translate(70 88)">
+    <rect width="116" height="92" rx="6" fill="#FFFFFF" stroke="#217346" stroke-width="3"/>
+    <rect x="0" y="0" width="116" height="22" fill="#217346"/>
+    <path d="M0 22h116M0 45h116M0 68h116M29 0v92M58 0v92M87 0v92" stroke="#D7EDE2" stroke-width="2"/>
+    <path d="M0 22h116" stroke="#1A5C38" stroke-width="2"/>
+  </g>
+  <rect x="70" y="190" width="72" height="28" rx="8" fill="#145C38"/>
+  <text x="106" y="210" text-anchor="middle" fill="#FFFFFF" font-size="16" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">XLS</text>
+</svg>`;
+  }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#f4f3ef"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="48" fill="${soft}"/>
-  <path d="M64 36h96l40 40v144a16 16 0 0 1-16 16H64a16 16 0 0 1-16-16V52a16 16 0 0 1 16-16z"
-        fill="url(#pg)" stroke="#ddd9d0" stroke-width="4"/>
-  <path d="M160 36v40h40" fill="none" stroke="#ddd9d0" stroke-width="4"/>
-  <rect x="64" y="36" width="8" height="184" rx="4" fill="${accent}"/>
-  <rect x="88" y="108" width="96" height="10" rx="5" fill="#d8d6cf"/>
-  <rect x="88" y="132" width="80" height="10" rx="5" fill="#d8d6cf"/>
-  <rect x="88" y="156" width="88" height="10" rx="5" fill="#d8d6cf"/>
-  <rect x="88" y="188" width="52" height="28" rx="8" fill="${accent}"/>
-  <text x="114" y="208" text-anchor="middle" fill="#1d1d1f" font-size="14" font-weight="700"
-        font-family="Segoe UI, Arial, sans-serif">${label}</text>
+  <rect width="256" height="256" rx="52" fill="#E0554A"/>
+  <path d="${pagePath()}" fill="#FFF8F7" stroke="#E7A8A2" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#E7A8A2" stroke-width="4"/>
+  <rect x="78" y="96" width="92" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="78" y="118" width="78" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="78" y="140" width="86" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="70" y="178" width="78" height="40" rx="10" fill="#B33830"/>
+  <text x="109" y="206" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">PDF</text>
 </svg>`;
 }
 
 const FILE_KINDS = [
-  { name: 'md', accent: '#f2b40a', soft: '#fdf1cf', label: 'MD', aliases: ['md', 'markdown', 'txt'] },
-  { name: 'doc', accent: '#4c86e8', soft: '#dce8fb', label: 'DOC', aliases: ['docx'] },
-  { name: 'sheet', accent: '#2f9463', soft: '#d8f0e4', label: 'XLS', aliases: ['xlsx', 'csv'] },
-  { name: 'pdf', accent: '#e0554a', soft: '#f8ddd9', label: 'PDF', aliases: ['pdf'] }
+  { name: 'md', aliases: ['md', 'markdown', 'txt'] },
+  { name: 'doc', aliases: ['docx'] },
+  { name: 'sheet', aliases: ['xlsx', 'csv'] },
+  { name: 'pdf', aliases: ['pdf'] }
 ];
 
 (async () => {
@@ -159,7 +199,8 @@ const FILE_KINDS = [
 
   // Per-type Explorer icons (paths used by electron-builder fileAssociations)
   for (const k of FILE_KINDS) {
-    const svg = fileTypeSvg(k.accent, k.soft, k.label);
+    const svg = fileTypeSvg(k.name);
+    fs.writeFileSync(path.join(fileIconsDir, `${k.name}.svg`), svg);
     const pngPath = path.join(fileIconsDir, `${k.name}.png`);
     fs.writeFileSync(pngPath, renderSvgPng(svg, 256));
     const ico = await pngToIco([256, 128, 64, 48, 32, 16].map((s) => renderSvgPng(svg, s)));

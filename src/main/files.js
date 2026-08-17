@@ -92,13 +92,75 @@ function normalizeCell(v) {
   return String(v);
 }
 
+const FONT_FACE_SUFFIXES = [
+  'Thin Italic', 'Hairline Italic', 'ExtraLight Italic', 'UltraLight Italic', 'Light Italic',
+  'Medium Italic', 'SemiBold Italic', 'DemiBold Italic', 'Bold Italic',
+  'ExtraBold Italic', 'UltraBold Italic', 'Black Italic', 'Heavy Italic',
+  'Extra Light', 'Ultra Light', 'Semi Bold', 'Demi Bold', 'Extra Bold', 'Ultra Bold',
+  'Thin', 'Hairline', 'ExtraLight', 'UltraLight', 'Light',
+  'Medium', 'SemiBold', 'DemiBold', 'ExtraBold', 'UltraBold',
+  'Black', 'Heavy', 'Bold', 'Italic', 'Oblique', 'Regular'
+];
+
+function splitExcelFont(name, bold, italic) {
+  const raw = String(name || '').trim();
+  const fallback = bold && italic ? 'Bold Italic' : bold ? 'Bold' : italic ? 'Italic' : 'Regular';
+  if (!raw) return { font: 'Calibri', face: fallback };
+  const lower = raw.toLowerCase();
+  for (const suf of FONT_FACE_SUFFIXES) {
+    const token = ' ' + suf.toLowerCase();
+    if (lower.endsWith(token) && raw.length > suf.length + 1) {
+      return { font: raw.slice(0, raw.length - suf.length - 1).trim(), face: suf };
+    }
+  }
+  return { font: raw, face: fallback };
+}
+
+function excelFontFromStyle(st) {
+  const family = st.font || 'Calibri';
+  const face = st.face || (st.bold && st.italic ? 'Bold Italic' : st.bold ? 'Bold' : st.italic ? 'Italic' : 'Regular');
+  const compact = String(face).toLowerCase().replace(/[_\s]+/g, '');
+  const italic = compact.includes('italic') || compact.includes('oblique') || !!st.italic;
+  let bold = !!st.bold;
+  if (st.face) {
+    bold = compact.includes('extrabold') || compact.includes('ultrabold') ||
+      compact.includes('black') || compact.includes('heavy') ||
+      (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'));
+  }
+  let name = family;
+  const weightPart = String(face).replace(/\s*(italic|oblique)\s*/ig, ' ').trim();
+  const weightCompact = weightPart.toLowerCase().replace(/[_\s]+/g, '');
+  if (weightPart && !/^(regular|normal|bold)$/.test(weightCompact)) {
+    name = `${family} ${weightPart}`.replace(/\s+/g, ' ').trim();
+  }
+  return {
+    name,
+    size: st.size || 11,
+    bold,
+    italic,
+    underline: !!st.underline,
+    strike: !!st.strike,
+    color: st.color ? { argb: 'FF' + st.color.replace('#', '') } : undefined
+  };
+}
+
 function extractCellStyle(cell) {
   const s = {};
   if (cell.font) {
-    if (cell.font.name) s.font = cell.font.name;
+    const split = splitExcelFont(cell.font.name, !!cell.font.bold, !!cell.font.italic);
+    s.font = split.font;
+    s.face = split.face;
     if (cell.font.size) s.size = cell.font.size;
     if (cell.font.bold) s.bold = true;
-    if (cell.font.italic) s.italic = true;
+    else {
+      const compact = split.face.toLowerCase().replace(/[_\s]+/g, '');
+      if (compact.includes('extrabold') || compact.includes('ultrabold') ||
+          compact.includes('black') || compact.includes('heavy') ||
+          (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'))) {
+        s.bold = true;
+      }
+    }
+    if (cell.font.italic || /italic|oblique/i.test(split.face)) s.italic = true;
     if (cell.font.underline) s.underline = true;
     if (cell.font.strike) s.strike = true;
     if (cell.font.color && cell.font.color.argb) {
@@ -524,16 +586,8 @@ function modelToWorkbook(sheets) {
 
         const st = styles[`${r},${c}`];
         if (st) {
-          if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color) {
-            cell.font = {
-              name: st.font || 'Calibri',
-              size: st.size || 11,
-              bold: !!st.bold,
-              italic: !!st.italic,
-              underline: !!st.underline,
-              strike: !!st.strike,
-              color: st.color ? { argb: 'FF' + st.color.replace('#', '') } : undefined
-            };
+          if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color || st.face) {
+            cell.font = excelFontFromStyle(st);
           }
           if (st.fill && st.fill !== '#ffffff') {
             cell.fill = {

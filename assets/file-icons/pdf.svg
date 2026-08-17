@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#E0554A"/>
+  <path d="M58 28h92l44 44v140a18 18 0 0 1-18 18H58a18 18 0 0 1-18-18V46a18 18 0 0 1 18-18z" fill="#FFF8F7" stroke="#E7A8A2" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#E7A8A2" stroke-width="4"/>
+  <rect x="78" y="96" width="92" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="78" y="118" width="78" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="78" y="140" width="86" height="10" rx="5" fill="#E7C0BC"/>
+  <rect x="70" y="178" width="78" height="40" rx="10" fill="#B33830"/>
+  <text x="109" y="206" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">PDF</text>
+</svg>

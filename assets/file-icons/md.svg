@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#F6C445"/>
+  <path d="M58 28h92l44 44v140a18 18 0 0 1-18 18H58a18 18 0 0 1-18-18V46a18 18 0 0 1 18-18z" fill="#FFFDF6" stroke="#E2C56A" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#E2C56A" stroke-width="4"/>
+  <path d="M88 86h-14v84h18V128l16 28 16-28v42h18V86h-18l-16 32-16-32z" fill="#5A4300"/>
+  <rect x="72" y="188" width="72" height="28" rx="8" fill="#5A4300"/>
+  <text x="108" y="208" text-anchor="middle" fill="#FFFDF6" font-size="16" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">MD</text>
+</svg>

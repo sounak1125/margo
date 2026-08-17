@@ -49,6 +49,8 @@
     let renderTimer = null;
     let zoom = 1;
     let outlineRail = null;
+    const history = window.MargoHistory.create();
+    let skipInputRecord = false;
 
     function render() {
       const raw = marked.parse(textarea.value);
@@ -103,35 +105,70 @@
     }
 
     /* --- text manipulation helpers --- */
+    function capture() {
+      return {
+        text: textarea ? textarea.value : '',
+        start: textarea ? textarea.selectionStart : 0,
+        end: textarea ? textarea.selectionEnd : 0
+      };
+    }
+    function restore(snap) {
+      if (!textarea || !snap) return;
+      skipInputRecord = true;
+      textarea.value = snap.text || '';
+      const start = Math.max(0, Math.min(textarea.value.length, snap.start || 0));
+      const end = Math.max(0, Math.min(textarea.value.length, snap.end == null ? start : snap.end));
+      textarea.setSelectionRange(start, end);
+      skipInputRecord = false;
+      afterEdit();
+    }
+    function recordNow() {
+      if (!textarea || history.isApplying()) return;
+      history.record(capture());
+    }
+    function withImmediateHistory(fn) {
+      skipInputRecord = true;
+      try { fn(); } finally { skipInputRecord = false; }
+      recordNow();
+    }
+    function undo() { history.undo(restore); }
+    function redo() { history.redo(restore); }
+
     function surround(before, after, placeholder) {
-      const s = textarea.selectionStart, e = textarea.selectionEnd;
-      const sel = textarea.value.slice(s, e) || placeholder || '';
-      textarea.setRangeText(before + sel + after, s, e, 'end');
-      if (!textarea.value.slice(s, e).length) {
-        textarea.selectionStart = s + before.length;
-        textarea.selectionEnd = s + before.length + sel.length;
-      }
+      withImmediateHistory(() => {
+        const s = textarea.selectionStart, e = textarea.selectionEnd;
+        const sel = textarea.value.slice(s, e) || placeholder || '';
+        textarea.setRangeText(before + sel + after, s, e, 'end');
+        if (!textarea.value.slice(s, e).length) {
+          textarea.selectionStart = s + before.length;
+          textarea.selectionEnd = s + before.length + sel.length;
+        }
+      });
       afterEdit();
     }
     function prefixLines(prefix, numbered) {
-      const s = textarea.selectionStart, e = textarea.selectionEnd;
-      const v = textarea.value;
-      const ls = v.lastIndexOf('\n', s - 1) + 1;
-      let le = v.indexOf('\n', e); if (le === -1) le = v.length;
-      const block = v.slice(ls, le);
-      const lines = block.split('\n');
-      const out = lines.map((line, i) => {
-        const p = numbered ? `${i + 1}. ` : prefix;
-        return line.startsWith(p) ? line.slice(p.length) : p + line;
-      }).join('\n');
-      textarea.setRangeText(out, ls, le, 'select');
+      withImmediateHistory(() => {
+        const s = textarea.selectionStart, e = textarea.selectionEnd;
+        const v = textarea.value;
+        const ls = v.lastIndexOf('\n', s - 1) + 1;
+        let le = v.indexOf('\n', e); if (le === -1) le = v.length;
+        const block = v.slice(ls, le);
+        const lines = block.split('\n');
+        const out = lines.map((line, i) => {
+          const p = numbered ? `${i + 1}. ` : prefix;
+          return line.startsWith(p) ? line.slice(p.length) : p + line;
+        }).join('\n');
+        textarea.setRangeText(out, ls, le, 'select');
+      });
       afterEdit();
     }
     function insertBlock(text) {
-      const s = textarea.selectionStart;
-      const v = textarea.value;
-      const needsNL = s > 0 && v[s - 1] !== '\n' ? '\n\n' : '';
-      textarea.setRangeText(needsNL + text, s, textarea.selectionEnd, 'end');
+      withImmediateHistory(() => {
+        const s = textarea.selectionStart;
+        const v = textarea.value;
+        const needsNL = s > 0 && v[s - 1] !== '\n' ? '\n\n' : '';
+        textarea.setRangeText(needsNL + text, s, textarea.selectionEnd, 'end');
+      });
       afterEdit();
     }
     function afterEdit() {
@@ -336,7 +373,9 @@
       if (findIndex < 0 || !findHits[findIndex]) return;
       const hit = findHits[findIndex];
       const repl = replaceInput ? replaceInput.value : '';
-      textarea.setRangeText(repl, hit.start, hit.end, 'end');
+      withImmediateHistory(() => {
+        textarea.setRangeText(repl, hit.start, hit.end, 'end');
+      });
       afterEdit();
       const keep = findIndex;
       runFind(findInput.value);
@@ -364,7 +403,7 @@
         n++;
       }
       if (!n) return;
-      textarea.value = out;
+      withImmediateHistory(() => { textarea.value = out; });
       afterEdit();
       runFind(q);
     }
@@ -460,11 +499,25 @@
           outlineRail.querySelector('.doc-outline-close').addEventListener('click', () => toggleOutlineRail(false));
         }
 
-        textarea.addEventListener('input', () => { ctx.markDirty(); scheduleRender(); updateStatus(); });
+        history.seed(capture());
+        textarea.addEventListener('input', () => {
+          ctx.markDirty();
+          scheduleRender();
+          updateStatus();
+          if (!skipInputRecord && !history.isApplying()) history.record(capture(), { coalesce: true });
+        });
         textarea.addEventListener('keydown', (e) => {
           if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); surround('**', '**', 'bold'); }
           if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); surround('*', '*', 'italic'); }
-          if (e.key === 'Tab') { e.preventDefault(); textarea.setRangeText('  ', textarea.selectionStart, textarea.selectionEnd, 'end'); ctx.markDirty(); }
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            withImmediateHistory(() => {
+              textarea.setRangeText('  ', textarea.selectionStart, textarea.selectionEnd, 'end');
+            });
+            ctx.markDirty();
+            scheduleRender();
+            updateStatus();
+          }
         });
         // proportional scroll sync editor -> preview
         textarea.addEventListener('scroll', () => {
@@ -493,13 +546,19 @@
         closeFind();
       },
       commands: {
+        undo,
+        redo,
+        canUndo: () => history.canUndo(),
+        canRedo: () => history.canRedo(),
         setMdMode: (m) => setMode(m),
         getMdMode: () => mode,
         find: () => openFind(),
         paste: (t) => {
           if (!t) return;
           textarea.focus();
-          textarea.setRangeText(t, textarea.selectionStart, textarea.selectionEnd, 'end');
+          withImmediateHistory(() => {
+            textarea.setRangeText(t, textarea.selectionStart, textarea.selectionEnd, 'end');
+          });
           afterEdit();
         },
         zoomIn: () => zoomBy(1.1),

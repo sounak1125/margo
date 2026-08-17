@@ -118,6 +118,13 @@ function createWindow() {
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(true);
+  });
+  win.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+    if (permission === 'local-fonts') return true;
+    return true;
+  });
 
   if (DEBUG) {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {

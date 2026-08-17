@@ -1,0 +1,82 @@
+/* Margo — shared document undo/redo (snapshot timeline).
+   record() stores the state AFTER a mutation. seed() sets the baseline
+   on mount so the first undo returns to the loaded document. */
+(function () {
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function create(opts) {
+    const limit = (opts && opts.limit) || 80;
+    const coalesceMs = (opts && opts.coalesceMs) || 400;
+    let stack = [];
+    let index = -1;
+    let applying = false;
+    let lastAt = 0;
+    let coalesceOpen = false;
+
+    function seed(snapshot) {
+      stack = [clone(snapshot)];
+      index = 0;
+      applying = false;
+      lastAt = 0;
+      coalesceOpen = false;
+    }
+
+    function record(snapshot, recOpts) {
+      if (applying) return;
+      const snap = clone(snapshot);
+      const coalesce = !!(recOpts && recOpts.coalesce);
+      const now = Date.now();
+      if (coalesce && coalesceOpen && index >= 0 && (now - lastAt) < coalesceMs) {
+        stack[index] = snap;
+        lastAt = now;
+        return;
+      }
+      stack = stack.slice(0, index + 1);
+      stack.push(snap);
+      if (stack.length > limit) stack.shift();
+      index = stack.length - 1;
+      lastAt = now;
+      coalesceOpen = coalesce;
+    }
+
+    function undo(apply) {
+      if (index <= 0) return false;
+      applying = true;
+      coalesceOpen = false;
+      try {
+        index -= 1;
+        apply(clone(stack[index]));
+      } finally {
+        applying = false;
+      }
+      return true;
+    }
+
+    function redo(apply) {
+      if (index >= stack.length - 1) return false;
+      applying = true;
+      coalesceOpen = false;
+      try {
+        index += 1;
+        apply(clone(stack[index]));
+      } finally {
+        applying = false;
+      }
+      return true;
+    }
+
+    return {
+      seed,
+      record,
+      undo,
+      redo,
+      canUndo: () => index > 0,
+      canRedo: () => index >= 0 && index < stack.length - 1,
+      isApplying: () => applying
+    };
+  }
+
+  window.MargoHistory = { create };
+})();

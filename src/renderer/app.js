@@ -841,6 +841,12 @@
   const EXT_STYLE = {
     md: 'MD', markdown: 'MD', txt: 'TXT', docx: 'DOC', xlsx: 'XLS', csv: 'CSV', html: 'HTM', pdf: 'PDF'
   };
+  const EXT_ICON = {
+    md: 'md', markdown: 'md', txt: 'md',
+    docx: 'doc',
+    xlsx: 'sheet', csv: 'sheet',
+    pdf: 'pdf'
+  };
   function timeAgo(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return 'just now';
@@ -882,10 +888,19 @@
         img.alt = '';
         thumb.appendChild(img);
       } else {
-        const g = document.createElement('span');
-        g.className = 'thumb-glyph';
-        g.textContent = EXT_STYLE[r.ext] || '?';
-        thumb.appendChild(g);
+        const kind = EXT_ICON[r.ext];
+        if (kind) {
+          const img = document.createElement('img');
+          img.src = `../../assets/file-icons/${kind}.png`;
+          img.alt = EXT_STYLE[r.ext] || '';
+          thumb.classList.add('recent-thumb-type');
+          thumb.appendChild(img);
+        } else {
+          const g = document.createElement('span');
+          g.className = 'thumb-glyph';
+          g.textContent = EXT_STYLE[r.ext] || '?';
+          thumb.appendChild(g);
+        }
       }
 
       const info = document.createElement('span');
@@ -1529,8 +1544,8 @@
         { label: 'Exit', action: () => window.margo.quit() }
       ] },
       { label: 'Edit', items: [
-        { label: 'Undo', accel: 'Ctrl+Z', enabled: hasDoc, action: () => editCommand('undo') },
-        { label: 'Redo', accel: 'Ctrl+Y', enabled: hasDoc, action: () => editCommand('redo') },
+        { label: 'Undo', accel: 'Ctrl+Z', enabled: hasDoc && !!(ed && ed.commands && ed.commands.canUndo && ed.commands.canUndo()), action: () => editCommand('undo') },
+        { label: 'Redo', accel: 'Ctrl+Y', enabled: hasDoc && !!(ed && ed.commands && ed.commands.canRedo && ed.commands.canRedo()), action: () => editCommand('redo') },
         { sep: true },
         { label: 'Cut', accel: 'Ctrl+X', enabled: hasDoc, action: () => editCommand('cut') },
         { label: 'Copy', accel: 'Ctrl+C', enabled: hasDoc, action: () => editCommand('copy') },
@@ -1622,9 +1637,37 @@
     if (p) await openFromPath(p);
   });
 
+  function isDocumentUndoTarget(el) {
+    if (!el || !el.closest) return true;
+    if (el.closest('#modal-backdrop')) return false;
+    if (el.closest('.doc-find-bar')) return false;
+    if (el.closest('#account-menu')) return false;
+    if (el.closest('.sig-pad') || el.closest('.sig-float') || el.closest('.sig-pad-hint')) return false;
+    return true;
+  }
+
   /* ---------------- shortcuts ---------------- */
   document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'editor') saveDoc(false); }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
+        e.preventDefault();
+        editCommand('undo');
+      }
+    }
+    else if (mod && e.key.toLowerCase() === 'y') {
+      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
+        e.preventDefault();
+        editCommand('redo');
+      }
+    }
+    else if (mod && e.shiftKey && e.key.toLowerCase() === 'z') {
+      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
+        e.preventDefault();
+        editCommand('redo');
+      }
+    }
+    else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'editor') saveDoc(false); }
     else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'editor') saveDoc(true); }
     else if (e.ctrlKey && e.key.toLowerCase() === 'o') { e.preventDefault(); pickAndOpen(); }
     else if (e.ctrlKey && e.key.toLowerCase() === 'e') { e.preventDefault(); if (state.view === 'editor') exportPdf(); }

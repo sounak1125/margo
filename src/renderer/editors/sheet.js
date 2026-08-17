@@ -5,11 +5,9 @@
   const DEFAULT_COL_WIDTH = 96;
   const DEFAULT_ROW_HEIGHT = 24;
 
-  const FONT_FAMILIES = [
-    'Calibri', 'Arial', 'Segoe UI', 'Times New Roman', 'Georgia',
-    'Verdana', 'Trebuchet MS', 'Consolas', 'Courier New', 'Tahoma'
-  ];
-  const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 36, 48, 72];
+  const FONTS = window.MargoFonts;
+  const FONT_FAMILIES = FONTS.FAMILIES;
+  const FONT_SIZES = FONTS.SIZES;
   const FILL_COLORS = [
     '#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1',
     '#fef2f2', '#fee2e2', '#fef3c7', '#fde68a', '#ecfdf5',
@@ -330,8 +328,12 @@
     let selEnd = null;   // for range selection
     let editingTd = null;
     let tableEl, colgroupEl, theadEl, tbody, gridScroll, nameBox, formulaInput, tabsEl, fxBtn;
-    let fontSelect, sizeSelect;
-    let undoStack = [], redoStack = [];
+    let fontSelect, variantSelect, sizeSelect;
+    let fontFacesByFamily = new Map(
+      FONT_FAMILIES.map((f) => [f, FONTS.defaultFaces(f)])
+    );
+    const history = window.MargoHistory.create();
+    let skipHistory = false;
     let zoom = 1;
     let activeRibbonTab = 'home';
     let currentCalcCycle = new Set();
@@ -349,11 +351,12 @@
       const cw = sheet().colWidths || {};
       return cw[c] !== undefined ? cw[c] : DEFAULT_COL_WIDTH;
     }
-    function setColWidth(c, px) {
+    function setColWidth(c, px, skipUndo) {
       sheet().colWidths = sheet().colWidths || {};
       sheet().colWidths[c] = Math.max(32, Math.min(600, px));
       applyColWidth(c);
       ctx.markDirty();
+      if (!skipUndo) recordSheet();
     }
     function applyColWidth(c) {
       const w = getColWidth(c);
@@ -382,11 +385,12 @@
       const rh = sheet().rowHeights || {};
       return rh[r] !== undefined ? rh[r] : DEFAULT_ROW_HEIGHT;
     }
-    function setRowHeight(r, px) {
+    function setRowHeight(r, px, skipUndo) {
       sheet().rowHeights = sheet().rowHeights || {};
       sheet().rowHeights[r] = Math.max(18, Math.min(300, px));
       applyRowHeight(r);
       ctx.markDirty();
+      if (!skipUndo) recordSheet();
     }
     function applyRowHeight(r) {
       const h = getRowHeight(r);
@@ -553,14 +557,38 @@
       return formatCellValue(val, fmt, dec);
     }
 
+    function captureSheet() {
+      return {
+        sheets: model.sheets,
+        active: model.active,
+        sel: sel ? { r: sel.r, c: sel.c } : { r: 0, c: 0 },
+        selEnd: selEnd ? { r: selEnd.r, c: selEnd.c } : null,
+        autoFilterActive: !!autoFilterActive
+      };
+    }
+    function restoreSheet(snap) {
+      if (!snap) return;
+      skipHistory = true;
+      model.sheets = snap.sheets;
+      model.active = snap.active || 0;
+      autoFilterActive = !!snap.autoFilterActive;
+      sel = snap.sel ? { r: snap.sel.r, c: snap.sel.c } : { r: 0, c: 0 };
+      selEnd = snap.selEnd ? { r: snap.selEnd.r, c: snap.selEnd.c } : null;
+      renderTabs();
+      renderGrid();
+      if (formulaInput) formulaInput.value = getCellRaw(sel.r, sel.c);
+      updateStatus();
+      skipHistory = false;
+      focusGrid();
+    }
+    function recordSheet(opts) {
+      if (skipHistory || history.isApplying() || !model) return;
+      history.record(captureSheet(), opts);
+    }
+
     function setCell(r, c, value, skipUndo) {
       const old = getCellRaw(r, c);
       if (old === value) return;
-      if (!skipUndo) {
-        undoStack.push({ s: model.active, r, c, old, val: value });
-        redoStack = [];
-        if (undoStack.length > 400) undoStack.shift();
-      }
       const rows = sheet().rows;
       while (rows.length <= r) rows.push([]);
       const row = rows[r];
@@ -570,6 +598,7 @@
       recalculateGrid();
       ctx.markDirty();
       updateStatus();
+      if (!skipUndo) recordSheet();
     }
 
     function recalculateGrid() {
@@ -612,7 +641,19 @@
 
       // Sync ribbon font controls to active cell style
       const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
-      if (fontSelect) fontSelect.value = st.font || 'Calibri';
+      const family = st.font || 'Calibri';
+      if (fontSelect) {
+        const names = [...fontSelect.options].map((o) => o.value);
+        if (names.includes(family)) fontSelect.value = family;
+        else if (names.includes('Calibri')) fontSelect.value = 'Calibri';
+      }
+      if (variantSelect) {
+        FONTS.fillVariantSelect(
+          variantSelect,
+          FONTS.getFacesForFamily(fontSelect ? fontSelect.value : family, fontFacesByFamily),
+          FONTS.inferFace(st)
+        );
+      }
       if (sizeSelect) sizeSelect.value = String(st.size || 11);
     }
 
@@ -744,15 +785,18 @@
         handle.classList.add('resizing');
         startX = e.clientX;
         startW = getColWidth(c);
+        let moved = false;
 
         const onMove = (ev) => {
+          moved = true;
           const newW = Math.max(36, startW + (ev.clientX - startX));
-          setColWidth(c, newW);
+          setColWidth(c, newW, true);
         };
         const onUp = () => {
           handle.classList.remove('resizing');
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          if (moved) recordSheet();
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
@@ -786,15 +830,18 @@
         handle.classList.add('resizing');
         startY = e.clientY;
         startH = getRowHeight(r);
+        let moved = false;
 
         const onMove = (ev) => {
+          moved = true;
           const newH = Math.max(18, startH + (ev.clientY - startY));
-          setRowHeight(r, newH);
+          setRowHeight(r, newH, true);
         };
         const onUp = () => {
           handle.classList.remove('resizing');
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          if (moved) recordSheet();
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
@@ -808,21 +855,30 @@
       if (!sh || !sh.styles) return;
       const st = sh.styles[`${r},${c}`];
       if (!st) return;
-      if (st.bold) td.classList.add('cell-bold');
-      if (st.italic) td.classList.add('cell-italic');
-      if (st.underline) td.classList.add('cell-underline');
-      if (st.strike) td.classList.add('cell-strike');
-      if (st.wrap) td.classList.add('cell-wrap');
+      const face = FONTS.inferFace(st);
+      const parsed = FONTS.parseFontFaceStyle(face);
+      td.classList.toggle('cell-bold', parsed.weight >= 700);
+      td.classList.toggle('cell-italic', parsed.fontStyle === 'italic');
+      td.classList.toggle('cell-underline', !!st.underline);
+      td.classList.toggle('cell-strike', !!st.strike);
+      td.classList.toggle('cell-wrap', !!st.wrap);
       if (st.align) td.classList.add(`cell-align-${st.align}`);
       if (st.valign) td.classList.add(`cell-valign-${st.valign}`);
       if (st.border) td.classList.add(`border-${st.border}`);
       if (st.fill) td.style.backgroundColor = st.fill;
       if (st.color) td.style.color = st.color;
-      if (st.font) td.style.fontFamily = `"${st.font}", sans-serif`;
+      const family = st.font || 'Calibri';
+      td.style.fontFamily = FONTS.fontFamilyCss(
+        family,
+        face,
+        FONTS.getFacesForFamily(family, fontFacesByFamily)
+      );
+      td.style.fontWeight = String(parsed.weight);
+      td.style.fontStyle = parsed.fontStyle;
       if (st.size) {
         td.style.fontSize = `${st.size}pt`;
         const minH = Math.max(24, Math.round(st.size * 1.5) + 4);
-        if (getRowHeight(r) < minH) setRowHeight(r, minH);
+        if (getRowHeight(r) < minH) setRowHeight(r, minH, true);
       }
     }
 
@@ -1016,6 +1072,46 @@
       }
       ctx.markDirty();
       recalculateGrid();
+      updateStatus();
+      recordSheet();
+    }
+
+    function applyFontFaceToSelection(family, styleLabel) {
+      applyStyleToSelection(FONTS.stylePatchFromFace(family, styleLabel || 'Regular'));
+    }
+
+    function toggleFaceFlag(kind) {
+      const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
+      const family = st.font || (fontSelect && fontSelect.value) || 'Calibri';
+      const faces = FONTS.getFacesForFamily(family, fontFacesByFamily);
+      const parsed = FONTS.parseFontFaceStyle(FONTS.inferFace(st));
+      let weight = parsed.weight;
+      let italic = parsed.fontStyle === 'italic';
+      if (kind === 'bold') weight = weight >= 700 ? 400 : 700;
+      if (kind === 'italic') italic = !italic;
+      const nextFace = FONTS.matchFaceFromComputed(faces, weight, italic ? 'italic' : 'normal');
+      applyFontFaceToSelection(family, nextFace);
+    }
+
+    async function loadSystemFonts() {
+      const catalog = await FONTS.loadSystemFonts();
+      fontFacesByFamily = catalog.facesByFamily;
+      FONTS.fillFamilySelect(fontSelect, catalog.families);
+      if (variantSelect) {
+        FONTS.fillVariantSelect(
+          variantSelect,
+          FONTS.getFacesForFamily(fontSelect ? fontSelect.value : 'Calibri', fontFacesByFamily)
+        );
+      }
+      if (tbody) {
+        for (let r = 0; r < viewR; r++) {
+          for (let c = 0; c < viewC; c++) {
+            const td = tdAt(r, c);
+            if (td) applyCellStyleToTd(td, r, c);
+          }
+        }
+      }
+      updateStatus();
     }
 
     function setNumberFormat(fmt, decimals) {
@@ -1062,6 +1158,7 @@
           sheet().charts.splice(idx, 1);
           ctx.markDirty();
           renderCharts();
+          recordSheet();
         });
         box.appendChild(head);
 
@@ -1096,6 +1193,7 @@
               ch.x = box.offsetLeft;
               ch.y = box.offsetTop;
               ctx.markDirty();
+              recordSheet();
             }
             drag = null;
             document.removeEventListener('pointermove', onMove);
@@ -1209,6 +1307,7 @@
       });
       ctx.markDirty();
       renderCharts();
+      recordSheet();
       ctx.toast(`Inserted ${type} chart`);
     }
 
@@ -1385,6 +1484,7 @@
             ctx.markDirty();
             renderTabs();
             renderGrid();
+            recordSheet();
           });
           tab.appendChild(close);
         }
@@ -1402,6 +1502,7 @@
             s.name = newName.trim();
             ctx.markDirty();
             renderTabs();
+            recordSheet();
           }
         });
 
@@ -1419,6 +1520,7 @@
         ctx.markDirty();
         renderTabs();
         renderGrid();
+        recordSheet();
       });
       tabsEl.appendChild(addBtn);
     }
@@ -1490,24 +1592,41 @@
 
       // Font family
       fontSelect = document.createElement('select');
-      fontSelect.className = 'tb-select';
-      FONT_FAMILIES.forEach((f) => {
-        const o = document.createElement('option');
-        o.value = f; o.textContent = f;
-        fontSelect.appendChild(o);
+      fontSelect.className = 'tb-select tb-font';
+      fontSelect.title = 'Font family';
+      FONTS.fillFamilySelect(fontSelect, FONT_FAMILIES.slice());
+      fontSelect.addEventListener('change', () => {
+        FONTS.fillVariantSelect(
+          variantSelect,
+          FONTS.getFacesForFamily(fontSelect.value, fontFacesByFamily)
+        );
+        applyFontFaceToSelection(fontSelect.value, variantSelect ? variantSelect.value : 'Regular');
       });
-      fontSelect.addEventListener('change', () => applyStyleToSelection({ font: fontSelect.value }));
       pHome.appendChild(fontSelect);
+
+      // Font variant / style
+      variantSelect = document.createElement('select');
+      variantSelect.className = 'tb-select tb-font-variant';
+      variantSelect.title = 'Font weight & style';
+      FONTS.fillVariantSelect(
+        variantSelect,
+        FONTS.getFacesForFamily(fontSelect.value, fontFacesByFamily)
+      );
+      variantSelect.addEventListener('change', () => {
+        applyFontFaceToSelection(fontSelect.value, variantSelect.value);
+      });
+      pHome.appendChild(variantSelect);
 
       // Font size
       sizeSelect = document.createElement('select');
-      sizeSelect.className = 'tb-select';
+      sizeSelect.className = 'tb-select tb-size';
       FONT_SIZES.forEach((s) => {
         const o = document.createElement('option');
         o.value = String(s); o.textContent = s;
         sizeSelect.appendChild(o);
       });
       sizeSelect.value = '11';
+      sizeSelect.title = 'Font size (pt)';
       sizeSelect.addEventListener('change', () => applyStyleToSelection({ size: parseInt(sizeSelect.value, 10) }));
       pHome.appendChild(sizeSelect);
 
@@ -1517,14 +1636,8 @@
 
       makeSep(pHome);
 
-      makeBtn(pHome, 'Bold (Ctrl+B)', '<span class="tb-glyph">B</span>', () => {
-        const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
-        applyStyleToSelection({ bold: !st.bold });
-      });
-      makeBtn(pHome, 'Italic (Ctrl+I)', '<span class="tb-glyph i">I</span>', () => {
-        const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
-        applyStyleToSelection({ italic: !st.italic });
-      });
+      makeBtn(pHome, 'Bold (Ctrl+B)', '<span class="tb-glyph">B</span>', () => toggleFaceFlag('bold'));
+      makeBtn(pHome, 'Italic (Ctrl+I)', '<span class="tb-glyph i">I</span>', () => toggleFaceFlag('italic'));
       makeBtn(pHome, 'Underline (Ctrl+U)', '<span class="tb-glyph u">U</span>', () => {
         const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
         applyStyleToSelection({ underline: !st.underline });
@@ -1708,6 +1821,7 @@
         autoFilterActive = !autoFilterActive;
         renderGrid();
         ctx.toast(`AutoFilter ${autoFilterActive ? 'enabled' : 'disabled'}`);
+        recordSheet();
       });
       makeBtn(pData, 'Find & Replace', I.search, () => openFindModal());
 
@@ -1751,23 +1865,18 @@
       }
       ctx.markDirty();
       recalculateGrid();
+      recordSheet();
       ctx.toast(`Sorted rows ${minR + 1}–${maxR + 1}`);
     }
 
     /* ---------- Undo & Redo ---------- */
     function undo() {
-      if (!undoStack.length) return;
-      const item = undoStack.pop();
-      redoStack.push({ s: item.s, r: item.r, c: item.c, old: getCellRaw(item.r, item.c, item.s), val: item.old });
-      if (model.active !== item.s) { model.active = item.s; renderTabs(); renderGrid(); }
-      setCell(item.r, item.c, item.old, true);
+      if (editingTd) commitEdit(true);
+      history.undo(restoreSheet);
     }
     function redo() {
-      if (!redoStack.length) return;
-      const item = redoStack.pop();
-      undoStack.push({ s: item.s, r: item.r, c: item.c, old: getCellRaw(item.r, item.c, item.s), val: item.val });
-      if (model.active !== item.s) { model.active = item.s; renderTabs(); renderGrid(); }
-      setCell(item.r, item.c, item.val, true);
+      if (editingTd) commitEdit(true);
+      history.redo(restoreSheet);
     }
 
     /* ---------- Event Wiring ---------- */
@@ -1841,17 +1950,30 @@
           if (selEnd) {
             const minR = Math.min(sel.r, selEnd.r), maxR = Math.max(sel.r, selEnd.r);
             const minC = Math.min(sel.c, selEnd.c), maxC = Math.max(sel.c, selEnd.c);
+            let changed = false;
             for (let r = minR; r <= maxR; r++) {
-              for (let c = minC; c <= maxC; c++) setCell(r, c, '');
+              for (let c = minC; c <= maxC; c++) {
+                if (getCellRaw(r, c) !== '') changed = true;
+                setCell(r, c, '', true);
+              }
             }
+            if (changed) recordSheet();
           } else {
             setCell(sel.r, sel.c, '');
           }
           formulaInput.value = '';
           return;
         }
-        if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
-        if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+        if (e.ctrlKey && e.key.toLowerCase() === 'b') {
+          e.preventDefault();
+          toggleFaceFlag('bold');
+          return;
+        }
+        if (e.ctrlKey && e.key.toLowerCase() === 'i') {
+          e.preventDefault();
+          toggleFaceFlag('italic');
+          return;
+        }
         if (e.ctrlKey && e.key.toLowerCase() === 'c') {
           e.preventDefault();
           try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {}
@@ -1886,7 +2008,8 @@
 
       formulaInput.addEventListener('input', () => {
         if (editingTd) return;
-        setCell(sel.r, sel.c, formulaInput.value);
+        setCell(sel.r, sel.c, formulaInput.value, true);
+        recordSheet({ coalesce: true });
       });
       formulaInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); select(sel.r + 1, sel.c); focusGrid(); }
@@ -1912,6 +2035,7 @@
         };
 
         buildRibbon();
+        loadSystemFonts();
         host.innerHTML =
           `<div class="sheet-wrap">
              <div class="sheet-bar">
@@ -1941,6 +2065,7 @@
         gridScroll.addEventListener('wheel', onCtrlWheel, { passive: false });
         renderTabs();
         renderGrid();
+        history.seed(captureSheet());
         window.scrollTo(0, 0);
         setTimeout(() => focusGrid(), 60);
       },
@@ -1971,6 +2096,8 @@
       commands: {
         undo,
         redo,
+        canUndo: () => history.canUndo(),
+        canRedo: () => history.canRedo(),
         copy: () => { try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {} },
         cut: () => {
           try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {}
@@ -1990,7 +2117,7 @@
         insertFx: openFunctionWizard,
         sortAsc: () => sortSelectedRange(true),
         sortDesc: () => sortSelectedRange(false),
-        toggleFilter: () => { autoFilterActive = !autoFilterActive; renderGrid(); },
+        toggleFilter: () => { autoFilterActive = !autoFilterActive; renderGrid(); recordSheet(); },
         increaseFontSize: () => stepFontSize(1),
         decreaseFontSize: () => stepFontSize(-1),
         setColWidth: (w) => setColWidth(sel.c, w),

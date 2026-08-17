@@ -12,11 +12,9 @@
   const PAGE_BREAK_HTML = '<div data-margo-page-break style="page-break-before:always"></div>';
   const EMPTY_PAGE = '<p><br></p>';
 
-  const FONT_FAMILIES = [
-    'Calibri', 'Arial', 'Times New Roman', 'Segoe UI', 'Georgia',
-    'Verdana', 'Trebuchet MS', 'Garamond', 'Courier New', 'Consolas', 'Tahoma', 'Palatino Linotype'
-  ];
-  const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72];
+  const FONTS = window.MargoFonts;
+  const FONT_FAMILIES = FONTS.FAMILIES;
+  const FONT_SIZES = FONTS.SIZES;
   const INK_COLORS = [
     '#1d1d1f', '#4b5563', '#6b7280', '#9ca3af',
     '#b42318', '#dc2626', '#ea580c', '#d97706',
@@ -64,53 +62,6 @@
     }
   ];
   const TEMP_FONT_FACE = '__margo_face__';
-
-  function parseFontFaceStyle(style) {
-    const s = String(style || 'Regular').trim() || 'Regular';
-    const lower = s.toLowerCase().replace(/[_\s]+/g, '');
-    const italic = lower.includes('italic') || lower.includes('oblique');
-    let weight = 400;
-    if (lower.includes('thin') || lower.includes('hairline')) weight = 100;
-    else if (lower.includes('extralight') || lower.includes('ultralight')) weight = 200;
-    else if (lower.includes('light')) weight = 300;
-    else if (lower.includes('medium')) weight = 500;
-    else if (lower.includes('semibold') || lower.includes('demibold')) weight = 600;
-    else if (lower.includes('extrabold') || lower.includes('ultrabold')) weight = 800;
-    else if (lower.includes('black') || lower.includes('heavy')) weight = 900;
-    else if (lower.includes('bold')) weight = 700;
-    return { weight, fontStyle: italic ? 'italic' : 'normal', label: s };
-  }
-
-  function parseCssFontWeight(w) {
-    if (w === 'bold') return 700;
-    if (w === 'normal') return 400;
-    const n = parseInt(w, 10);
-    return Number.isFinite(n) ? n : 400;
-  }
-
-  function compareFontFaces(a, b) {
-    const pa = parseFontFaceStyle(a.style);
-    const pb = parseFontFaceStyle(b.style);
-    const ka = pa.weight * 2 + (pa.fontStyle === 'italic' ? 1 : 0);
-    const kb = pb.weight * 2 + (pb.fontStyle === 'italic' ? 1 : 0);
-    return ka - kb || String(a.style).localeCompare(String(b.style));
-  }
-
-  function matchFaceFromComputed(faces, fontWeight, fontStyle) {
-    const w = parseCssFontWeight(fontWeight);
-    const italic = String(fontStyle || '').includes('italic') || String(fontStyle || '').includes('oblique');
-    let best = faces[0] ? faces[0].style : 'Regular';
-    let bestScore = Infinity;
-    faces.forEach((face) => {
-      const p = parseFontFaceStyle(face.style);
-      const score = Math.abs(p.weight - w) + (p.fontStyle === (italic ? 'italic' : 'normal') ? 0 : 50);
-      if (score < bestScore) {
-        bestScore = score;
-        best = face.style;
-      }
-    });
-    return best;
-  }
 
   function sanitizeHtml(html) {
     return DOMPurify.sanitize(html || EMPTY_PAGE, { ALLOWED_TAGS, ALLOWED_ATTR });
@@ -175,6 +126,8 @@
     let findIndex = -1;
     let findOpen = false;
     let activeRibbonTab = 'home';
+    const history = window.MargoHistory.create();
+    let skipInputRecord = false;
 
     // Layout configuration state
     let layout = {
@@ -203,33 +156,121 @@
       if (el && el.classList && el.classList.contains('doc-page')) activePage = el;
     }
 
+    function serializeDoc() {
+      unwrapFindMarks();
+      const pages = pageList();
+      const bodyHtmls = pages.map((p) => {
+        const src = p.querySelector('.doc-page-body') || p;
+        const clone = src.cloneNode(true);
+        if (src === p) {
+          const h = clone.querySelector('.doc-page-header');
+          if (h) h.remove();
+          const f = clone.querySelector('.doc-page-footer');
+          if (f) f.remove();
+        }
+        normalizeFonts(clone);
+        return clone.innerHTML;
+      });
+      return {
+        html: bodyHtmls.join(PAGE_BREAK_HTML),
+        notes: notes.map((n) => ({
+          id: n.id,
+          quote: n.quote,
+          body: n.body,
+          done: !!n.done,
+          createdAt: n.createdAt
+        })),
+        layout: { ...layout }
+      };
+    }
+
+    function syncLayoutControls() {
+      if (!ctx.toolbar) return;
+      ctx.toolbar.querySelectorAll('[data-layout-field]').forEach((sel) => {
+        const field = sel.dataset.layoutField;
+        if (field === 'columns') sel.value = String(layout.columns || 1);
+        else if (layout[field] != null) sel.value = layout[field];
+      });
+    }
+
+    function restoreDoc(snap) {
+      if (!pagesRoot || !snap) return;
+      skipInputRecord = true;
+      notes = Array.isArray(snap.notes) ? snap.notes.map((n) => ({ ...n })) : [];
+      layout = {
+        size: 'letter',
+        orientation: 'portrait',
+        margins: 'normal',
+        columns: 1,
+        headerText: '',
+        footerText: '',
+        showPageNumbers: true,
+        ...(snap.layout || {})
+      };
+      pagesRoot.innerHTML = '';
+      splitPages(snap.html || EMPTY_PAGE).forEach((html) => {
+        pagesRoot.appendChild(makePageEl(html));
+      });
+      activePage = pagesRoot.querySelector('.doc-page');
+      applyLayoutAttributes();
+      syncLayoutControls();
+      rehydrateNoteAnchors();
+      updateNotesBadge();
+      renderNotesRail();
+      updateStatus();
+      refreshStates();
+      skipInputRecord = false;
+      const body = getPage();
+      if (body) body.focus();
+    }
+
+    function recordNow() {
+      if (!pagesRoot || history.isApplying()) return;
+      history.record(serializeDoc());
+    }
+
+    function undo() { history.undo(restoreDoc); }
+    function redo() { history.redo(restoreDoc); }
+
     function exec(cmd, value, withCss) {
       const page = getPage();
       if (!page) return;
       page.focus();
-      try { document.execCommand('styleWithCSS', false, !!withCss); } catch {}
-      document.execCommand(cmd, false, value ?? null);
-      try { document.execCommand('styleWithCSS', false, false); } catch {}
+      skipInputRecord = true;
+      try {
+        try { document.execCommand('styleWithCSS', false, !!withCss); } catch {}
+        document.execCommand(cmd, false, value ?? null);
+        try { document.execCommand('styleWithCSS', false, false); } catch {}
+      } finally {
+        skipInputRecord = false;
+      }
       ctx.markDirty();
       refreshStates();
       updateStatus();
+      recordNow();
     }
 
     function setFontSize(pt) {
       const page = getPage();
       if (!page) return;
       page.focus();
-      try { document.execCommand('styleWithCSS', false, false); } catch {}
-      document.execCommand('fontSize', false, '7');
-      page.querySelectorAll('font[size="7"]').forEach((f) => {
-        const span = document.createElement('span');
-        span.style.fontSize = pt + 'pt';
-        while (f.firstChild) span.appendChild(f.firstChild);
-        f.replaceWith(span);
-      });
+      skipInputRecord = true;
+      try {
+        try { document.execCommand('styleWithCSS', false, false); } catch {}
+        document.execCommand('fontSize', false, '7');
+        page.querySelectorAll('font[size="7"]').forEach((f) => {
+          const span = document.createElement('span');
+          span.style.fontSize = pt + 'pt';
+          while (f.firstChild) span.appendChild(f.firstChild);
+          f.replaceWith(span);
+        });
+      } finally {
+        skipInputRecord = false;
+      }
       ctx.markDirty();
       refreshStates();
       updateStatus();
+      recordNow();
     }
 
     function stepFontSize(delta) {
@@ -245,52 +286,34 @@
       const page = getPage();
       if (!page || !family) return;
       page.focus();
-      const { weight, fontStyle } = parseFontFaceStyle(styleLabel);
-      try { document.execCommand('styleWithCSS', false, false); } catch {}
-      document.execCommand('fontName', false, TEMP_FONT_FACE);
-      page.querySelectorAll(`font[face="${TEMP_FONT_FACE}"]`).forEach((f) => {
-        const span = document.createElement('span');
-        span.style.fontFamily = `"${family}"`;
-        span.style.fontWeight = String(weight);
-        span.style.fontStyle = fontStyle;
-        while (f.firstChild) span.appendChild(f.firstChild);
-        f.replaceWith(span);
-      });
+      const faces = getFacesForFamily(family);
+      const { weight, fontStyle } = FONTS.parseFontFaceStyle(styleLabel);
+      skipInputRecord = true;
+      try {
+        try { document.execCommand('styleWithCSS', false, false); } catch {}
+        document.execCommand('fontName', false, TEMP_FONT_FACE);
+        page.querySelectorAll(`font[face="${TEMP_FONT_FACE}"]`).forEach((f) => {
+          const span = document.createElement('span');
+          span.style.fontFamily = FONTS.fontFamilyCss(family, styleLabel, faces);
+          span.style.fontWeight = String(weight);
+          span.style.fontStyle = fontStyle;
+          while (f.firstChild) span.appendChild(f.firstChild);
+          f.replaceWith(span);
+        });
+      } finally {
+        skipInputRecord = false;
+      }
       ctx.markDirty();
       refreshStates();
+      recordNow();
     }
 
     function getFacesForFamily(family) {
-      if (!family) return [{ style: 'Regular', fullName: 'Regular' }];
-      if (fontFacesByFamily.has(family)) return fontFacesByFamily.get(family);
-      const lower = family.toLowerCase();
-      for (const [name, faces] of fontFacesByFamily) {
-        if (name.toLowerCase() === lower) return faces;
-      }
-      return [{ style: 'Regular', fullName: family }];
+      return FONTS.getFacesForFamily(family, fontFacesByFamily);
     }
 
     function fillVariantSelect(family, preferredStyle) {
-      if (!variantSelect) return;
-      const faces = getFacesForFamily(family);
-      const multi = faces.length > 1;
-      const current = preferredStyle || variantSelect.value;
-      variantSelect.innerHTML = '';
-      faces.forEach((face) => {
-        const o = document.createElement('option');
-        o.value = face.style;
-        o.textContent = face.style;
-        variantSelect.appendChild(o);
-      });
-      const styles = faces.map((f) => f.style);
-      let pick = null;
-      if (current && styles.includes(current)) pick = current;
-      else {
-        pick = styles.find((s) => /^regular$/i.test(s) || /^normal$/i.test(s)) || styles[0] || 'Regular';
-      }
-      variantSelect.value = pick;
-      variantSelect.disabled = !multi;
-      variantSelect.title = multi ? 'Font style' : 'Font style (only one face installed)';
+      FONTS.fillVariantSelect(variantSelect, getFacesForFamily(family), preferredStyle);
     }
 
     function normalizeFonts(root) {
@@ -338,6 +361,7 @@
         range.insertNode(mark);
       }
       ctx.markDirty();
+      recordNow();
     }
 
     function applyLineSpacing(spacing) {
@@ -350,6 +374,7 @@
       if (block) {
         block.style.lineHeight = String(spacing);
         ctx.markDirty();
+        recordNow();
       }
     }
 
@@ -410,7 +435,7 @@
           if (node && node.nodeType === 3) node = node.parentElement;
           if (page && node && page.contains(node)) {
             const cs = getComputedStyle(node);
-            preferred = matchFaceFromComputed(getFacesForFamily(familySelect.value), cs.fontWeight, cs.fontStyle);
+            preferred = FONTS.matchFaceFromComputed(getFacesForFamily(familySelect.value), cs.fontWeight, cs.fontStyle);
           }
         } catch {}
         fillVariantSelect(familySelect.value, preferred);
@@ -538,6 +563,7 @@
       setActivePage(el);
       ctx.markDirty();
       updateStatus();
+      recordNow();
       setTimeout(() => {
         const body = el.querySelector('.doc-page-body') || el;
         body.focus();
@@ -666,6 +692,7 @@
       ctxTbl.row.after(tr);
       ctx.markDirty();
       refreshStates();
+      recordNow();
     }
 
     function addTableCol() {
@@ -687,6 +714,7 @@
       }
       ctx.markDirty();
       refreshStates();
+      recordNow();
     }
 
     function deleteTableRow() {
@@ -700,6 +728,7 @@
       }
       ctx.markDirty();
       refreshStates();
+      recordNow();
     }
 
     function deleteTableCol() {
@@ -718,6 +747,7 @@
       }
       ctx.markDirty();
       refreshStates();
+      recordNow();
     }
 
     function setTableCellShading(color) {
@@ -725,6 +755,7 @@
       if (!ctxTbl) return;
       ctxTbl.cell.style.backgroundColor = color || '';
       ctx.markDirty();
+      recordNow();
     }
 
     /* ---------- table border resize ---------- */
@@ -859,6 +890,7 @@
         if (tableResize) {
           tableResize.table.classList.remove('margo-table-resizing');
           ctx.markDirty();
+          recordNow();
         }
         tableResize = null;
         document.removeEventListener('pointermove', onMove, true);
@@ -1249,6 +1281,7 @@
       const textNode = document.createTextNode(repl);
       cur.replaceWith(textNode);
       ctx.markDirty();
+      recordNow();
       runFind(findInput.value);
     }
 
@@ -1261,6 +1294,7 @@
       });
       ctx.markDirty();
       unwrapFindMarks();
+      recordNow();
       runFind(findInput.value);
     }
 
@@ -1319,66 +1353,15 @@
 
     /* ---------- fonts ---------- */
     function fillFontSelect(list) {
-      if (!familySelect) return;
-      const current = familySelect.value;
       availableFonts = list;
-      familySelect.innerHTML = '';
-      list.forEach((f) => {
-        const o = document.createElement('option');
-        o.value = f;
-        o.textContent = f;
-        o.style.fontFamily = `"${f}", sans-serif`;
-        familySelect.appendChild(o);
-      });
-      if (list.includes(current)) familySelect.value = current;
-      else if (list.includes('Calibri')) familySelect.value = 'Calibri';
-      else if (list[0]) familySelect.value = list[0];
-      fillVariantSelect(familySelect.value);
+      FONTS.fillFamilySelect(familySelect, list);
+      fillVariantSelect(familySelect ? familySelect.value : '');
     }
 
     async function loadSystemFonts() {
-      const faceMap = new Map();
-      try {
-        if (typeof window.queryLocalFonts === 'function') {
-          const fonts = await window.queryLocalFonts();
-          fonts.forEach((f) => {
-            const family = (f.family || '').trim();
-            if (!family) return;
-            const key = family.toLowerCase();
-            if (!faceMap.has(key)) faceMap.set(key, { name: family, styles: new Map() });
-            const entry = faceMap.get(key);
-            const style = ((f.style || 'Regular').trim() || 'Regular');
-            const styleKey = style.toLowerCase();
-            if (!entry.styles.has(styleKey)) {
-              entry.styles.set(styleKey, { style, fullName: (f.fullName || style).trim() || style });
-            }
-          });
-        }
-      } catch {}
-
-      fontFacesByFamily = new Map();
-      const seen = new Set();
-      const merged = [];
-
-      FONT_FAMILIES.forEach((f) => {
-        if (seen.has(f.toLowerCase())) return;
-        seen.add(f.toLowerCase());
-        merged.push(f);
-        const api = faceMap.get(f.toLowerCase());
-        if (api) fontFacesByFamily.set(f, Array.from(api.styles.values()).sort(compareFontFaces));
-        else fontFacesByFamily.set(f, [{ style: 'Regular', fullName: f }]);
-      });
-
-      Array.from(faceMap.values())
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .forEach((entry) => {
-          if (seen.has(entry.name.toLowerCase())) return;
-          seen.add(entry.name.toLowerCase());
-          merged.push(entry.name);
-          fontFacesByFamily.set(entry.name, Array.from(entry.styles.values()).sort(compareFontFaces));
-        });
-
-      fillFontSelect(merged);
+      const catalog = await FONTS.loadSystemFonts();
+      fontFacesByFamily = catalog.facesByFamily;
+      fillFontSelect(catalog.families);
     }
 
     /* ---------- sticky notes ---------- */
@@ -1482,6 +1465,7 @@
           card.classList.toggle('done', note.done);
           ctx.markDirty();
           updateNotesBadge();
+          recordNow();
         });
         card.querySelector('.doc-note-delete').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1496,6 +1480,7 @@
           ctx.markDirty();
           updateNotesBadge();
           renderNotesRail();
+          recordNow();
         });
         list.appendChild(card);
       });
@@ -1561,6 +1546,7 @@
       toggleNotesRail(true);
       renderNotesRail();
       scrollToNote(id);
+      recordNow();
     }
 
     /* ---------- Ribbon Toolbar ---------- */
@@ -1959,11 +1945,13 @@
         sizeBtnSelect.appendChild(opt);
       });
       sizeBtnSelect.value = layout.size || 'letter';
+      sizeBtnSelect.dataset.layoutField = 'size';
       sizeBtnSelect.addEventListener('change', () => {
         layout.size = sizeBtnSelect.value;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
+        recordNow();
       });
       pLayout.appendChild(sizeBtnSelect);
 
@@ -1981,11 +1969,13 @@
         orientSelect.appendChild(opt);
       });
       orientSelect.value = layout.orientation || 'portrait';
+      orientSelect.dataset.layoutField = 'orientation';
       orientSelect.addEventListener('change', () => {
         layout.orientation = orientSelect.value;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
+        recordNow();
       });
       pLayout.appendChild(orientSelect);
 
@@ -2005,11 +1995,13 @@
         marginSelect.appendChild(opt);
       });
       marginSelect.value = layout.margins || 'normal';
+      marginSelect.dataset.layoutField = 'margins';
       marginSelect.addEventListener('change', () => {
         layout.margins = marginSelect.value;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
+        recordNow();
       });
       pLayout.appendChild(marginSelect);
 
@@ -2028,11 +2020,13 @@
         colSelect.appendChild(opt);
       });
       colSelect.value = String(layout.columns || 1);
+      colSelect.dataset.layoutField = 'columns';
       colSelect.addEventListener('change', () => {
         layout.columns = parseInt(colSelect.value, 10) || 1;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
+        recordNow();
       });
       pLayout.appendChild(colSelect);
 
@@ -2044,6 +2038,7 @@
           layout.headerText = text.trim();
           updatePageHeadersAndFooters();
           ctx.markDirty();
+          recordNow();
         }
       });
       makeBtn(pLayout, 'Footer Text', I.headerFooter || 'Footer', async () => {
@@ -2052,6 +2047,7 @@
           layout.footerText = text.trim();
           updatePageHeadersAndFooters();
           ctx.markDirty();
+          recordNow();
         }
       });
 
@@ -2167,7 +2163,11 @@
         try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch {}
         try { document.execCommand('styleWithCSS', false, false); } catch {}
 
-        pagesRoot.addEventListener('input', () => { ctx.markDirty(); updateStatus(); });
+        pagesRoot.addEventListener('input', () => {
+          ctx.markDirty();
+          updateStatus();
+          if (!skipInputRecord && !history.isApplying()) history.record(serializeDoc(), { coalesce: true });
+        });
         pagesRoot.addEventListener('focusin', (e) => {
           const p = e.target.closest && e.target.closest('.doc-page');
           if (p) setActivePage(p);
@@ -2189,9 +2189,12 @@
             ALLOWED_TAGS,
             ALLOWED_ATTR: ['href', 'src', 'alt', 'colspan', 'rowspan', 'class', 'data-margo-note-id', 'style']
           });
-          document.execCommand('insertHTML', false, clean);
+          skipInputRecord = true;
+          try { document.execCommand('insertHTML', false, clean); }
+          finally { skipInputRecord = false; }
           ctx.markDirty();
           updateStatus();
+          recordNow();
         });
 
         addBtn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -2212,6 +2215,7 @@
         loadSystemFonts();
         updateStatus();
         refreshStates();
+        history.seed(serializeDoc());
         setTimeout(() => { const body = getPage(); if (body) body.focus(); }, 60);
 
         function onSelChange() {
@@ -2241,40 +2245,26 @@
         this._test = { addPage: () => addPage(), openFind, addNote, openStats: openStatsModal };
       },
       getData() {
-        unwrapFindMarks();
-        const pages = pageList();
-        const bodyHtmls = pages.map((p) => {
-          const src = p.querySelector('.doc-page-body') || p;
-          const clone = src.cloneNode(true);
-          if (src === p) {
-            const h = clone.querySelector('.doc-page-header');
-            if (h) h.remove();
-            const f = clone.querySelector('.doc-page-footer');
-            if (f) f.remove();
-          }
-          normalizeFonts(clone);
-          return clone.innerHTML;
-        });
-        return {
-          html: bodyHtmls.join(PAGE_BREAK_HTML),
-          notes: notes.map((n) => ({
-            id: n.id,
-            quote: n.quote,
-            body: n.body,
-            done: !!n.done,
-            createdAt: n.createdAt
-          })),
-          layout: { ...layout }
-        };
+        return serializeDoc();
       },
       focus() { const p = getPage(); if (p) p.focus(); },
       destroy() { if (this._cleanup) this._cleanup(); },
       commands: {
+        undo,
+        redo,
+        canUndo: () => history.canUndo(),
+        canRedo: () => history.canRedo(),
         paste: (t) => {
           const page = getPage();
           if (!page) return;
           page.focus();
-          if (t) document.execCommand('insertText', false, t);
+          if (t) {
+            skipInputRecord = true;
+            try { document.execCommand('insertText', false, t); }
+            finally { skipInputRecord = false; }
+            ctx.markDirty();
+            recordNow();
+          }
         },
         addPage: () => addPage(),
         find: () => openFind(),
