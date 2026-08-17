@@ -926,8 +926,22 @@
   }
 
   /* ---------------- sliding sidebar ---------------- */
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 480;
+  const SIDEBAR_DEFAULT = 252;
   let sidebarPinned = localStorage.getItem('margo.sidebarPinned') === '1';
   let sideTimer = null;
+  let sidebarResizing = false;
+  let sidebarWidth = parseInt(localStorage.getItem('margo.sidebarWidth'), 10);
+  if (!Number.isFinite(sidebarWidth)) sidebarWidth = SIDEBAR_DEFAULT;
+
+  function applySidebarWidth(px) {
+    const w = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px)));
+    document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    return w;
+  }
+  applySidebarWidth(sidebarWidth);
+
   function applySidebarMode() {
     els.shell.classList.toggle('pinned', sidebarPinned);
     if (sidebarPinned) els.sidebar.classList.add('open');
@@ -940,7 +954,7 @@
     els.sidebar.classList.add('open');
   }
   function closeSidebar(immediate) {
-    if (sidebarPinned) return;
+    if (sidebarPinned || sidebarResizing) return;
     clearTimeout(sideTimer);
     if (immediate) { els.sidebar.classList.remove('open'); return; }
     sideTimer = setTimeout(() => els.sidebar.classList.remove('open'), 240);
@@ -955,6 +969,37 @@
   els.sidebar.addEventListener('mouseenter', openSidebar);
   els.sidebar.addEventListener('mouseleave', () => closeSidebar());
   els.pinBtn.addEventListener('click', toggleSidebarPin);
+
+  const resizeEl = $('side-resize');
+  if (resizeEl) {
+    resizeEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sidebarResizing = true;
+      openSidebar();
+      document.body.classList.add('sidebar-resizing');
+      const startX = e.clientX;
+      const startW = els.sidebar.getBoundingClientRect().width;
+      const onMove = (ev) => {
+        sidebarWidth = applySidebarWidth(startW + (ev.clientX - startX));
+      };
+      const onUp = () => {
+        sidebarResizing = false;
+        document.body.classList.remove('sidebar-resizing');
+        localStorage.setItem('margo.sidebarWidth', String(sidebarWidth));
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+    resizeEl.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      sidebarWidth = applySidebarWidth(SIDEBAR_DEFAULT);
+      localStorage.setItem('margo.sidebarWidth', String(sidebarWidth));
+    });
+  }
 
   /* ---------------- menu bar ---------------- */
   function showShortcuts() {
@@ -1624,8 +1669,6 @@
   $('btn-open-file').addEventListener('click', pickAndOpen);
   els.btnClearRecents.addEventListener('click', async () => { await window.margo.recents.clear(); loadRecents(); });
   els.btnHome.addEventListener('click', () => { if (state.view === 'home') return; showLanding(); });
-
-  $('btn-shortcuts').addEventListener('click', showShortcuts);
 
   /* ---------------- drag & drop ---------------- */
   document.addEventListener('dragover', (e) => e.preventDefault());
