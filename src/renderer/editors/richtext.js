@@ -927,9 +927,15 @@
           const page = pages[i];
           const body = page.querySelector('.doc-page-body');
           if (!body) { i++; continue; }
-          const columns = Math.max(1, parseInt(pagesRoot.dataset.columns, 10) || 1);
+          /* Multi-column pages are measured one column deep, not the whole
+             page. Scaling the limit by the column count is what you would
+             want, but a Range spanning a column break reports a rect across
+             both columns, so the text splitter never converges and the reflow
+             churns until the renderer stops responding. One column deep is
+             conservative - a two-column page holds less than it could - but it
+             never overflows and never loses content. */
           const columnHeight = usableHeight(page);
-          const limit = columnHeight * columns;
+          const limit = columnHeight;
           if (limit <= 0) { i++; continue; }
 
           mergeContinued(body);
