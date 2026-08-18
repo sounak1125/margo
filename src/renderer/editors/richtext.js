@@ -212,11 +212,22 @@
       /* Only a page the document actually asked for gets a break in the saved
          HTML. Pages the flow created are joined seamlessly, so reopening or
          exporting does not freeze today's line wrapping into hard breaks. */
-      const joined = bodyHtmls.reduce((acc, html, i) => {
+      let joined = bodyHtmls.reduce((acc, html, i) => {
         if (i === 0) return html;
         const explicit = pages[i].dataset.pageBreak !== 'auto';
         return acc + (explicit ? PAGE_BREAK_HTML : '') + html;
       }, '');
+      /* Tables and paragraphs the flow had to break across pages are stitched
+         back together, so saving never splits the author's table in two. */
+      if (joined.indexOf('margo-continued') >= 0 || joined.indexOf('margoContinued') >= 0) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = joined;
+        while (mergeContinued(tmp)) { /* repeat for runs of continuations */ }
+        tmp.querySelectorAll('[data-margo-continued]').forEach((el) => {
+          el.removeAttribute('data-margo-continued');
+        });
+        joined = tmp.innerHTML;
+      }
       return {
         html: joined,
         notes: notes.map((n) => ({
@@ -731,10 +742,162 @@
       return el;
     }
 
+    /* Word breaks a table across pages by row and a paragraph by line. Moving
+       an oversized block whole instead leaves the rest of the page blank and
+       lets the block itself overflow past the page edge. */
+
+    const SPLITTABLE_TEXT = /^(P|H1|H2|H3|H4|H5|H6|BLOCKQUOTE|PRE|DIV)$/;
+
+    function tableRows(table) {
+      return Array.from(table.querySelectorAll(':scope > tbody > tr, :scope > tr'));
+    }
+
+    function tableBody(table) {
+      let tb = table.querySelector(':scope > tbody');
+      if (!tb) {
+        tb = document.createElement('tbody');
+        table.appendChild(tb);
+      }
+      return tb;
+    }
+
+    function splitTable(table, room) {
+      const rows = tableRows(table);
+      if (rows.length < 2) return null;
+      const head = table.querySelector(':scope > thead');
+      // Everything the table costs that is not a body row: borders, border
+      // spacing, caption and any header that repeats on the continuation.
+      const rowsTotal = rows.reduce((a, r) => a + outerHeight(r), 0);
+      let used = Math.max(0, outerHeight(table) - rowsTotal);
+      let cut = -1;
+      for (let i = 0; i < rows.length; i++) {
+        const h = outerHeight(rows[i]);
+        if (used + h > room) { cut = i; break; }
+        used += h;
+      }
+      // cut === 0 means not even the first row fits; the caller moves it whole.
+      if (cut <= 0 || cut >= rows.length) return null;
+
+      const rest = table.cloneNode(false);
+      rest.dataset.margoContinued = '1';
+      table.querySelectorAll(':scope > colgroup').forEach((c) => rest.appendChild(c.cloneNode(true)));
+      if (head) rest.appendChild(head.cloneNode(true));
+      const body = document.createElement('tbody');
+      rest.appendChild(body);
+      for (let i = cut; i < rows.length; i++) body.appendChild(rows[i]);
+      table.after(rest);
+      return rest;
+    }
+
+    function textNodesOf(el) {
+      const out = [];
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walk.nextNode())) out.push(node);
+      return out;
+    }
+
+    function splitTextBlock(el, room) {
+      if (!SPLITTABLE_TEXT.test(el.tagName)) return null;
+      // Anything with its own layout inside is kept whole.
+      if (el.querySelector('table, img, ul, ol')) return null;
+      const nodes = textNodesOf(el);
+      const total = nodes.reduce((a, t) => a + t.nodeValue.length, 0);
+      if (total < 80) return null;
+
+      const range = document.createRange();
+      const overhead = Math.max(0, outerHeight(el) - el.getBoundingClientRect().height);
+      room -= overhead;
+      if (room <= 24) return null;
+      const heightTo = (chars) => {
+        let left = chars;
+        for (const t of nodes) {
+          if (left <= t.nodeValue.length) {
+            range.setStart(el, 0);
+            range.setEnd(t, left);
+            return range.getBoundingClientRect().height;
+          }
+          left -= t.nodeValue.length;
+        }
+        return Infinity;
+      };
+      if (heightTo(total) <= room) return null;
+
+      // Largest prefix that still fits, then back up to a word boundary.
+      let lo = 0;
+      let hi = total;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (heightTo(mid) <= room) lo = mid; else hi = mid - 1;
+      }
+      if (lo < 40) return null;
+
+      let cut = lo;
+      let scan = 0;
+      let cutNode = null;
+      let cutOffset = 0;
+      for (const t of nodes) {
+        if (cut <= scan + t.nodeValue.length) {
+          cutOffset = cut - scan;
+          cutNode = t;
+          break;
+        }
+        scan += t.nodeValue.length;
+      }
+      if (!cutNode) return null;
+      const space = cutNode.nodeValue.lastIndexOf(' ', cutOffset);
+      if (space > 0) cutOffset = space + 1;
+      if (cutOffset <= 0 || cutOffset >= cutNode.nodeValue.length) {
+        if (cutNode === nodes[nodes.length - 1] && cutOffset >= cutNode.nodeValue.length) return null;
+      }
+
+      const rest = el.cloneNode(false);
+      rest.dataset.margoContinued = '1';
+      const tail = document.createRange();
+      tail.setStart(cutNode, Math.min(cutOffset, cutNode.nodeValue.length));
+      tail.setEndAfter(el.lastChild);
+      rest.appendChild(tail.extractContents());
+      if (!rest.textContent.trim()) return null;
+      el.after(rest);
+      return rest;
+    }
+
+    function splitBlock(el, room) {
+      if (!el || el.nodeType !== 1 || room <= 24) return null;
+      try {
+        return el.tagName === 'TABLE' ? splitTable(el, room) : splitTextBlock(el, room);
+      } catch {
+        return null;
+      }
+    }
+
+    /* Undo a previous split so the next pass measures the real block. Without
+       this the document would keep the split it happened to need earlier, and
+       edits would drift it further apart. */
+    function mergeContinued(body) {
+      let merged = false;
+      Array.from(body.children).forEach((el) => {
+        if (!el.dataset || el.dataset.margoContinued !== '1') return;
+        const prev = el.previousElementSibling;
+        if (!prev || prev.tagName !== el.tagName) return;
+        if (el.tagName === 'TABLE') {
+          const target = tableBody(prev);
+          tableRows(el).forEach((r) => target.appendChild(r));
+        } else {
+          while (el.firstChild) prev.appendChild(el.firstChild);
+          prev.normalize();
+        }
+        el.remove();
+        merged = true;
+      });
+      return merged;
+    }
+
     function repaginate(startPage) {
       if (!pagesRoot || paginating || composing) return false;
       paginating = true;
       const caret = captureCaret();
+      const splitTries = new Map();
       let changed = false;
       try {
         const all = pageList();
@@ -752,14 +915,28 @@
           const limit = usableHeight(page);
           if (limit <= 0) { i++; continue; }
 
-          const kids = Array.from(body.children);
+          mergeContinued(body);
+          let kids = Array.from(body.children);
           let used = 0;
           let spillAt = -1;
+          let didSplit = false;
           for (let k = 0; k < kids.length; k++) {
-            used += outerHeight(kids[k]);
-            // Never move the only block off a page, or nothing would ever fit
-            // and the loop would push content forward forever.
-            if (used > limit && k > 0) { spillAt = k; break; }
+            const h = outerHeight(kids[k]);
+            if (used + h > limit) {
+              // Break the block itself so the part that fits stays here.
+              const rest = splitBlock(kids[k], limit - used);
+              if (rest) {
+                kids = Array.from(body.children);
+                spillAt = kids.indexOf(rest);
+                changed = true;
+                didSplit = true;
+                break;
+              }
+              // Never move the only block off a page, or nothing would ever fit
+              // and the loop would push content forward forever.
+              if (k > 0) { spillAt = k; break; }
+            }
+            used += h;
           }
 
           if (spillAt > 0) {
@@ -774,7 +951,14 @@
               nextBody.insertBefore(moving[m], nextBody.firstChild);
             }
             changed = true;
-            i++;
+            // After a split the rows that stayed behind re-flow, so measure
+            // this page again rather than trusting the pre-split numbers.
+            // Bounded by attempts so a block that cannot shrink cannot spin.
+            if (didSplit && (splitTries.get(page) || 0) < 4) {
+              splitTries.set(page, (splitTries.get(page) || 0) + 1);
+            } else {
+              i++;
+            }
             continue;
           }
 
@@ -786,8 +970,43 @@
             let room = limit - used;
             while (nextBody && nextBody.firstElementChild) {
               const first = nextBody.firstElementChild;
+              const last = body.lastElementChild;
+              // A block we split earlier rejoins its own head a row at a time,
+              // so reclaimed space is filled instead of jumping a whole block.
+              if (first.dataset && first.dataset.margoContinued === '1'
+                  && last && last.tagName === first.tagName) {
+                let moved = false;
+                if (first.tagName === 'TABLE') {
+                  const target = tableBody(last);
+                  let rows = tableRows(first);
+                  while (rows.length) {
+                    const h = outerHeight(rows[0]);
+                    if (h > room) break;
+                    target.appendChild(rows.shift());
+                    room -= h;
+                    moved = true;
+                    changed = true;
+                  }
+                }
+                if (first.tagName === 'TABLE' && !tableRows(first).length) {
+                  first.remove();
+                  continue;
+                }
+                if (!moved) break;
+                break;
+              }
               const h = outerHeight(first);
-              if (h > room) break;
+              if (h > room) {
+                // The next page opens with a block too big for the space left
+                // here. Break it so the part that fits comes up, rather than
+                // leaving this page half empty and the block overhanging.
+                const rest = splitBlock(first, room);
+                if (rest) {
+                  body.appendChild(first);
+                  changed = true;
+                }
+                break;
+              }
               body.appendChild(first);
               room -= h;
               changed = true;
