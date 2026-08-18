@@ -332,6 +332,32 @@ function titleOf(p) {
   return path.basename(p, path.extname(p));
 }
 
+/* Page dimensions in twips, portrait-oriented: html-to-docx swaps width and
+   height itself when the orientation is landscape. Without this every export
+   came out US Letter no matter what the document actually was. */
+const PAGE_TWIPS = {
+  letter: { width: 12240, height: 15840 },
+  a4: { width: 11906, height: 16838 },
+  legal: { width: 12240, height: 20160 },
+  executive: { width: 10440, height: 15120 }
+};
+
+function docxPageSize(layout) {
+  const exact = layout && layout.pageTw;
+  if (exact && exact.w > 0 && exact.h > 0) {
+    return exact.w > exact.h
+      ? { width: exact.h, height: exact.w }
+      : { width: exact.w, height: exact.h };
+  }
+  const measured = layout && layout.pageIn;
+  if (measured && measured.w > 0 && measured.h > 0) {
+    const w = Math.round(measured.w * TWIPS_PER_INCH);
+    const h = Math.round(measured.h * TWIPS_PER_INCH);
+    return w > h ? { width: h, height: w } : { width: w, height: h };
+  }
+  return PAGE_TWIPS[(layout && layout.size) || 'letter'] || PAGE_TWIPS.letter;
+}
+
 async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
   const htmlString =
     `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title || 'Document')}</title></head>` +
@@ -343,8 +369,22 @@ async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
     moderate: { top: 1080, right: 1080, bottom: 1080, left: 1080 },
     wide: { top: 1440, right: 2880, bottom: 1440, left: 2880 }
   };
-  const margins = (layout && marginPresets[layout.margins]) || marginPresets.normal;
+  const twips = (inches) => Math.round(inches * TWIPS_PER_INCH);
+  const exactMargins = layout && layout.marginTw;
+  const measured = layout && layout.marginIn;
+  const base = exactMargins
+    ? { ...exactMargins }
+    : measured
+      ? {
+        top: twips(measured.top), right: twips(measured.right),
+        bottom: twips(measured.bottom), left: twips(measured.left)
+      }
+      : (layout && marginPresets[layout.margins]) || marginPresets.normal;
+  // html-to-docx writes these straight into pgMar, and undefined keys reach the
+  // XML as the literal string "undefined".
+  const margins = { ...base, header: 720, footer: 720, gutter: 0 };
   const orientation = (layout && layout.orientation === 'landscape') ? 'landscape' : 'portrait';
+  const pageSize = docxPageSize(layout);
 
   const docOpts = {
     title: title || 'Document',
@@ -354,6 +394,7 @@ async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
     footer: !!(layout && (layout.footerText || layout.showPageNumbers)),
     pageNumber: !!(layout && layout.showPageNumbers),
     orientation,
+    pageSize,
     margins
   };
 
@@ -547,6 +588,7 @@ async function readDocxSectionLayout(filePath) {
         layout.size = nearestPageSize(wIn, hIn);
         layout.orientation = orient === 'landscape' || wIn > hIn ? 'landscape' : 'portrait';
         layout.pageIn = { w: +wIn.toFixed(3), h: +hIn.toFixed(3) };
+        layout.pageTw = { w: Math.round(wTw), h: Math.round(hTw) };
       }
     }
 
@@ -566,6 +608,12 @@ async function readDocxSectionLayout(filePath) {
           right: +right.toFixed(3),
           bottom: +bottom.toFixed(3),
           left: +left.toFixed(3)
+        };
+        layout.marginTw = {
+          top: Math.round(parseFloat(attrOf(pgMar, 'w:top'))),
+          right: Math.round(parseFloat(attrOf(pgMar, 'w:right'))),
+          bottom: Math.round(parseFloat(attrOf(pgMar, 'w:bottom'))),
+          left: Math.round(parseFloat(attrOf(pgMar, 'w:left')))
         };
       }
     }
