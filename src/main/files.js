@@ -24,7 +24,213 @@ turndown.use(gfm);
    falls through to htmlPaths.empty for breakType "page". hr is one of mammoth's
    void tags, so an empty mapped hr survives the empty-element pass; a div would
    not. We swap it for Margo's own marker once the HTML is out. */
-const DOCX_STYLE_MAP = ["br[type='page'] => hr.margo-page-break"];
+/* Underline has no default target in mammoth (findHtmlPathForRunProperty is
+   called without one), so it is dropped unless the map claims it. */
+const DOCX_STYLE_MAP = [
+  "br[type='page'] => hr.margo-page-break",
+  'u => u',
+  'strike => s'
+];
+
+/* Mammoth's model carries the run font, run size, paragraph alignment and
+   paragraph indent, but its HTML converter ignores all four, which is why an
+   imported document arrived as undifferentiated Calibri. Its converter is
+   still the best thing available for numbering, nested lists, tables, images
+   and hyperlinks, so rather than replace it we give each distinct combination
+   of formatting a synthetic style name, generate map entries that carry it
+   into a class, and turn those classes into inline styles afterwards. */
+
+function walkModel(node, visit) {
+  if (!node) return;
+  visit(node);
+  const kids = node.children;
+  if (kids && kids.length) for (const c of kids) walkModel(c, visit);
+}
+
+function paragraphTag(styleName) {
+  const s = String(styleName || '').trim();
+  const m = /^heading\s*([1-6])$/i.exec(s);
+  if (m) return 'h' + m[1];
+  if (/^title$/i.test(s)) return 'h1';
+  if (/^subtitle$/i.test(s)) return 'h2';
+  if (/quote/i.test(s)) return 'blockquote';
+  return 'p';
+}
+
+function twipsToPt(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n / 20 : null;
+}
+
+function paragraphCss(p) {
+  const css = [];
+  if (p.alignment && /^(left|right|center|justify|both)$/i.test(p.alignment)) {
+    css.push('text-align:' + (p.alignment.toLowerCase() === 'both' ? 'justify' : p.alignment.toLowerCase()));
+  }
+  const ind = p.indent || {};
+  const startPt = twipsToPt(ind.start);
+  const endPt = twipsToPt(ind.end);
+  const firstPt = twipsToPt(ind.firstLine);
+  const hangPt = twipsToPt(ind.hanging);
+  if (startPt) css.push('margin-left:' + startPt.toFixed(1) + 'pt');
+  if (endPt) css.push('margin-right:' + endPt.toFixed(1) + 'pt');
+  if (firstPt) css.push('text-indent:' + firstPt.toFixed(1) + 'pt');
+  else if (hangPt) css.push('text-indent:-' + hangPt.toFixed(1) + 'pt');
+  if (p.__margoLine) css.push('line-height:' + p.__margoLine);
+  return css.join(';');
+}
+
+function runCss(r) {
+  const css = [];
+  if (r.font) css.push('font-family:' + String(r.font).replace(/[;"']/g, ''));
+  if (r.fontSize) css.push('font-size:' + r.fontSize + 'pt');
+  if (r.__margoColor) css.push('color:#' + r.__margoColor);
+  return css.join(';');
+}
+
+/* Colour and line spacing are not in mammoth's model at all - its body reader
+   never looks at w:color or w:spacing - so they are read straight from the
+   XML and matched to the model by document order. If the counts disagree the
+   correlation is abandoned, so the failure mode is losing colour, never
+   painting text the wrong colour. */
+function readDirectFormatting(xml) {
+  const colors = [];
+  const runRe = /<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
+  let m;
+  while ((m = runRe.exec(xml))) {
+    const c = /<w:color[^>]*w:val="([0-9A-Fa-f]{6})"/.exec(m[0]);
+    colors.push(c && c[1].toLowerCase() !== 'auto' ? c[1] : null);
+  }
+  const lines = [];
+  const paraRe = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  while ((m = paraRe.exec(xml))) {
+    const s = /<w:spacing[^>]*w:line="(\d+)"[^>]*\/?>/.exec(m[0]);
+    const rule = /<w:spacing[^>]*w:lineRule="([a-z]+)"/i.exec(m[0]);
+    if (s && (!rule || rule[1].toLowerCase() === 'auto')) {
+      const mult = parseInt(s[1], 10) / 240;
+      lines.push(mult > 0.4 && mult < 5 ? mult.toFixed(2) : null);
+    } else {
+      lines.push(null);
+    }
+  }
+  return { colors, lines };
+}
+
+function collectFormatting(doc, direct) {
+  const runs = [];
+  const paras = [];
+  walkModel(doc, (node) => {
+    if (node.type === 'run') runs.push(node);
+    else if (node.type === 'paragraph') paras.push(node);
+  });
+  if (direct.colors.length === runs.length) {
+    runs.forEach((r, i) => { if (direct.colors[i]) r.__margoColor = direct.colors[i]; });
+  }
+  if (direct.lines.length === paras.length) {
+    paras.forEach((p, i) => { if (direct.lines[i]) p.__margoLine = direct.lines[i]; });
+  }
+  return { runs, paras };
+}
+
+function buildFormattingMap(doc, direct) {
+  const { runs, paras } = collectFormatting(doc, direct);
+  const runStyles = new Map();
+  const paraStyles = new Map();
+
+  runs.forEach((r) => {
+    const css = runCss(r);
+    if (!css) return;
+    if (!runStyles.has(css)) runStyles.set(css, 'MargoRun' + (runStyles.size + 1));
+  });
+  paras.forEach((p) => {
+    // List paragraphs are matched by mammoth on their numbering, and a custom
+    // style-name entry would win over that and destroy the nesting.
+    if (p.numbering) return;
+    const css = paragraphCss(p);
+    if (!css) return;
+    const key = paragraphTag(p.styleName) + '|' + css;
+    if (!paraStyles.has(key)) paraStyles.set(key, 'MargoPara' + (paraStyles.size + 1));
+  });
+
+  const styleMap = [];
+  const classCss = new Map();
+  runStyles.forEach((name, css) => {
+    const cls = name.toLowerCase();
+    styleMap.push("r[style-name='" + name + "'] => span." + cls);
+    classCss.set(cls, css);
+  });
+  paraStyles.forEach((name, key) => {
+    const cut = key.indexOf('|');
+    const tag = key.slice(0, cut);
+    const cls = name.toLowerCase();
+    styleMap.push("p[style-name='" + name + "'] => " + tag + '.' + cls + ':fresh');
+    classCss.set(cls, key.slice(cut + 1));
+  });
+  return { styleMap, classCss, runStyles, paraStyles };
+}
+
+function applyFormattingNames(doc, direct, built) {
+  collectFormatting(doc, direct);
+  walkModel(doc, (node) => {
+    if (node.type === 'run') {
+      const css = runCss(node);
+      if (!css) return;
+      const name = built.runStyles.get(css);
+      // A run styled "Strong" loses its default mapping once renamed, so fold
+      // the weight in rather than dropping it.
+      if (name) {
+        if (/^strong$/i.test(node.styleName || '')) node.isBold = true;
+        node.styleName = name;
+      }
+    } else if (node.type === 'paragraph') {
+      if (node.numbering) return;
+      const css = paragraphCss(node);
+      if (!css) return;
+      const name = built.paraStyles.get(paragraphTag(node.styleName) + '|' + css);
+      if (name) node.styleName = name;
+    }
+  });
+}
+
+function inlineFormattingClasses(html, classCss) {
+  let out = html;
+  classCss.forEach((css, cls) => {
+    const re = new RegExp(' class="' + cls + '"', 'g');
+    out = out.replace(re, ' style="' + css + '"');
+  });
+  return out;
+}
+
+async function convertDocxHtml(filePath) {
+  const zip = await JSZip.loadAsync(await fsp.readFile(filePath));
+  const docFile = zip.file('word/document.xml');
+  const xml = docFile ? await docFile.async('string') : '';
+  const direct = readDirectFormatting(xml);
+
+  // First conversion only to get at the document model; mammoth exposes it
+  // through transformDocument and nowhere else.
+  let model = null;
+  await mammoth.convertToHtml({ path: filePath }, {
+    styleMap: DOCX_STYLE_MAP,
+    transformDocument: (doc) => { model = doc; return doc; }
+  });
+  if (!model) {
+    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+    return plain.value || '';
+  }
+
+  const built = buildFormattingMap(model, direct);
+  if (!built.styleMap.length) {
+    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+    return plain.value || '';
+  }
+
+  const result = await mammoth.convertToHtml({ path: filePath }, {
+    styleMap: DOCX_STYLE_MAP.concat(built.styleMap),
+    transformDocument: (doc) => { applyFormattingNames(doc, direct, built); return doc; }
+  });
+  return inlineFormattingClasses(result.value || '', built.classCss);
+}
 const MARGO_PAGE_BREAK = '<div data-margo-page-break style="page-break-before:always"></div>';
 
 const MAPPED_BREAK = '<hr[^>]*class="[^"]*margo-page-break[^"]*"[^>]*\\/?>';
@@ -64,8 +270,8 @@ async function openPath(filePath) {
     return { kind: 'md', name, path: filePath, markdown };
   }
   if (ext === '.docx') {
-    const result = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
-    const html = restorePageBreaks((result.value || '').trim()) || '<p></p>';
+    const converted = await convertDocxHtml(filePath);
+    const html = restorePageBreaks(converted.trim()) || '<p></p>';
     const notes = await readDocxNotes(filePath);
     // A file Margo saved carries its exact layout; anything else we read from
     // the Word section properties.
