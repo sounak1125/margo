@@ -170,7 +170,12 @@
       columns: 1,
       headerText: '',
       footerText: '',
-      showPageNumbers: true
+      showPageNumbers: true,
+      // Measured from the source file (inches). Present only for imported
+      // documents whose geometry does not land exactly on a preset; the
+      // dropdowns still show the nearest preset name.
+      pageIn: null,
+      marginIn: null
     };
 
     function getPageEl() {
@@ -545,12 +550,39 @@
       });
     }
 
+    const CSS_PX_PER_INCH = 96;
+
     function applyLayoutAttributes() {
       if (!pagesRoot) return;
       pagesRoot.dataset.size = layout.size || 'letter';
       pagesRoot.dataset.orientation = layout.orientation || 'portrait';
       pagesRoot.dataset.margins = layout.margins || 'normal';
       pagesRoot.dataset.columns = String(layout.columns || 1);
+
+      // Render the document at its real measurements when we have them, so an
+      // A4 or custom page is not silently redrawn as US Letter.
+      const px = (inches) => (inches * CSS_PX_PER_INCH).toFixed(2) + 'px';
+      const page = layout.pageIn;
+      const mar = layout.marginIn;
+      const s = pagesRoot.style;
+      if (page && page.w > 0 && page.h > 0) {
+        s.setProperty('--doc-page-w', px(page.w));
+        s.setProperty('--doc-page-h', px(page.h));
+      } else {
+        s.removeProperty('--doc-page-w');
+        s.removeProperty('--doc-page-h');
+      }
+      if (mar) {
+        s.setProperty('--doc-pad-t', px(mar.top));
+        s.setProperty('--doc-pad-r', px(mar.right));
+        s.setProperty('--doc-pad-b', px(mar.bottom));
+        s.setProperty('--doc-pad-l', px(mar.left));
+      } else {
+        ['t', 'r', 'b', 'l'].forEach((k) => s.removeProperty('--doc-pad-' + k));
+      }
+      pagesRoot.dataset.exactPage = page ? '1' : '0';
+      pagesRoot.dataset.exactMargins = mar ? '1' : '0';
+
       updatePageHeadersAndFooters();
     }
 
@@ -2032,6 +2064,7 @@
       sizeBtnSelect.dataset.layoutField = 'size';
       sizeBtnSelect.addEventListener('change', () => {
         layout.size = sizeBtnSelect.value;
+        layout.pageIn = null;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
@@ -2056,6 +2089,7 @@
       orientSelect.dataset.layoutField = 'orientation';
       orientSelect.addEventListener('change', () => {
         layout.orientation = orientSelect.value;
+        layout.pageIn = null;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();
@@ -2082,6 +2116,7 @@
       marginSelect.dataset.layoutField = 'margins';
       marginSelect.addEventListener('change', () => {
         layout.margins = marginSelect.value;
+        layout.marginIn = null;
         applyLayoutAttributes();
         ctx.markDirty();
         updateStatus();

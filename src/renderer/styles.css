@@ -770,6 +770,16 @@ body.sidebar-resizing .sidebar { transition: none !important; }
 .doc-pages[data-margins="moderate"] .doc-page { padding: 42px 56px 52px; }
 .doc-pages[data-margins="wide"] .doc-page { padding: 54px 110px 64px; }
 
+/* Measured geometry from an imported file. Sits after the size, orientation and
+   margin presets and matches their specificity so it wins on source order. */
+.doc-pages[data-exact-page="1"][data-size] .doc-page {
+  width: var(--doc-page-w);
+  min-height: var(--doc-page-h);
+}
+.doc-pages[data-exact-margins="1"][data-size] .doc-page {
+  padding: var(--doc-pad-t) var(--doc-pad-r) var(--doc-pad-b) var(--doc-pad-l);
+}
+
 /* Columns */
 .doc-pages[data-columns="2"] .doc-page-body { column-count: 2; column-gap: 36px; column-rule: 1px solid var(--border); }
 .doc-pages[data-columns="3"] .doc-page-body { column-count: 3; column-gap: 24px; column-rule: 1px solid var(--border); }

@@ -20,6 +20,25 @@ const turndown = new TurndownService({
 });
 turndown.use(gfm);
 
+/* Mammoth drops page breaks unless the style map claims them: htmlPathForBreak
+   falls through to htmlPaths.empty for breakType "page". hr is one of mammoth's
+   void tags, so an empty mapped hr survives the empty-element pass; a div would
+   not. We swap it for Margo's own marker once the HTML is out. */
+const DOCX_STYLE_MAP = ["br[type='page'] => hr.margo-page-break"];
+const MARGO_PAGE_BREAK = '<div data-margo-page-break style="page-break-before:always"></div>';
+
+const MAPPED_BREAK = '<hr[^>]*class="[^"]*margo-page-break[^"]*"[^>]*\\/?>';
+
+function restorePageBreaks(html) {
+  return String(html || '')
+    // A break in its own Word paragraph arrives as <p><hr/></p>. Replacing
+    // just the hr would leave the marker nested, and splitPages() only
+    // inspects top-level nodes, so the page would never split. Take the
+    // wrapping paragraph with it.
+    .replace(new RegExp('<p[^>]*>\\s*(?:' + MAPPED_BREAK + ')\\s*</p>', 'gi'), MARGO_PAGE_BREAK)
+    .replace(new RegExp(MAPPED_BREAK, 'gi'), MARGO_PAGE_BREAK);
+}
+
 const MD_EXTS = ['.md', '.markdown', '.txt'];
 const MAX_OPEN_BYTES = 500 * 1024 * 1024;
 
@@ -45,10 +64,12 @@ async function openPath(filePath) {
     return { kind: 'md', name, path: filePath, markdown };
   }
   if (ext === '.docx') {
-    const result = await mammoth.convertToHtml({ path: filePath });
-    const html = (result.value || '').trim() || '<p></p>';
+    const result = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+    const html = restorePageBreaks((result.value || '').trim()) || '<p></p>';
     const notes = await readDocxNotes(filePath);
-    const layout = await readDocxLayout(filePath);
+    // A file Margo saved carries its exact layout; anything else we read from
+    // the Word section properties.
+    const layout = (await readDocxLayout(filePath)) || (await readDocxSectionLayout(filePath));
     return { kind: 'doc', name, path: filePath, html, notes, layout };
   }
   if (ext === '.xlsx') {
@@ -451,6 +472,109 @@ async function maybeEmbedDocxNotes(docxBuf, notes) {
 
 const MARGO_LAYOUT_PART = 'customXml/margo-layout.json';
 const MARGO_LAYOUT_CT = 'application/json';
+
+/* Word stores page geometry in twentieths of a point (twips). Margo's dropdowns
+   only carry presets, so we report the nearest preset for the UI and keep the
+   measured values alongside so pages can render at their true size. */
+const TWIPS_PER_INCH = 1440;
+const PAGE_SIZES = [
+  { id: 'letter', w: 8.5, h: 11 },
+  { id: 'a4', w: 8.27, h: 11.69 },
+  { id: 'legal', w: 8.5, h: 14 },
+  { id: 'executive', w: 7.25, h: 10.5 }
+];
+// Word's own margin presets, matched by name so the dropdown reflects what the
+// author picked in Word.
+const MARGIN_PRESETS = [
+  { id: 'narrow', side: 0.5 },
+  { id: 'moderate', side: 0.75 },
+  { id: 'normal', side: 1 },
+  { id: 'wide', side: 2 }
+];
+
+function attrOf(tagXml, name) {
+  const m = tagXml && tagXml.match(new RegExp(name.replace(':', '\\:') + '="([^"]*)"'));
+  return m ? m[1] : null;
+}
+
+function nearestPageSize(wIn, hIn) {
+  const longEdge = Math.max(wIn, hIn);
+  const shortEdge = Math.min(wIn, hIn);
+  let best = null;
+  for (const s of PAGE_SIZES) {
+    const d = Math.abs(s.w - shortEdge) + Math.abs(s.h - longEdge);
+    if (!best || d < best.d) best = { id: s.id, d };
+  }
+  return best && best.d < 0.6 ? best.id : 'letter';
+}
+
+function nearestMargins(sideIn) {
+  let best = null;
+  for (const m of MARGIN_PRESETS) {
+    const d = Math.abs(m.side - sideIn);
+    if (!best || d < best.d) best = { id: m.id, d };
+  }
+  return best ? best.id : 'normal';
+}
+
+async function readDocxSectionLayout(filePath) {
+  try {
+    const buf = await fsp.readFile(filePath);
+    const zip = await JSZip.loadAsync(buf);
+    const docFile = zip.file('word/document.xml');
+    if (!docFile) return null;
+    const xml = await docFile.async('string');
+
+    // The body-level sectPr is the last one; earlier ones belong to sections
+    // above it. Margo carries a single layout, so the body default wins.
+    const sections = xml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/g);
+    const sect = sections && sections.length ? sections[sections.length - 1] : null;
+    if (!sect) return null;
+
+    const pgSz = (sect.match(/<w:pgSz[^>]*\/?>/) || [])[0];
+    const pgMar = (sect.match(/<w:pgMar[^>]*\/?>/) || [])[0];
+    if (!pgSz && !pgMar) return null;
+
+    const layout = {};
+
+    if (pgSz) {
+      const wTw = parseFloat(attrOf(pgSz, 'w:w'));
+      const hTw = parseFloat(attrOf(pgSz, 'w:h'));
+      const orient = (attrOf(pgSz, 'w:orient') || '').toLowerCase();
+      if (wTw > 0 && hTw > 0) {
+        const wIn = wTw / TWIPS_PER_INCH;
+        const hIn = hTw / TWIPS_PER_INCH;
+        layout.size = nearestPageSize(wIn, hIn);
+        layout.orientation = orient === 'landscape' || wIn > hIn ? 'landscape' : 'portrait';
+        layout.pageIn = { w: +wIn.toFixed(3), h: +hIn.toFixed(3) };
+      }
+    }
+
+    if (pgMar) {
+      const toIn = (v) => {
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? Math.max(0, n) / TWIPS_PER_INCH : null;
+      };
+      const top = toIn(attrOf(pgMar, 'w:top'));
+      const right = toIn(attrOf(pgMar, 'w:right'));
+      const bottom = toIn(attrOf(pgMar, 'w:bottom'));
+      const left = toIn(attrOf(pgMar, 'w:left'));
+      if ([top, right, bottom, left].every((v) => v != null)) {
+        layout.margins = nearestMargins((left + right) / 2);
+        layout.marginIn = {
+          top: +top.toFixed(3),
+          right: +right.toFixed(3),
+          bottom: +bottom.toFixed(3),
+          left: +left.toFixed(3)
+        };
+      }
+    }
+
+    return Object.keys(layout).length ? layout : null;
+  } catch {
+    return null;
+  }
+}
 
 async function readDocxLayout(filePath) {
   try {
