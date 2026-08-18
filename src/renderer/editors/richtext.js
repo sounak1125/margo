@@ -209,8 +209,16 @@
         normalizeFonts(clone);
         return clone.innerHTML;
       });
+      /* Only a page the document actually asked for gets a break in the saved
+         HTML. Pages the flow created are joined seamlessly, so reopening or
+         exporting does not freeze today's line wrapping into hard breaks. */
+      const joined = bodyHtmls.reduce((acc, html, i) => {
+        if (i === 0) return html;
+        const explicit = pages[i].dataset.pageBreak !== 'auto';
+        return acc + (explicit ? PAGE_BREAK_HTML : '') + html;
+      }, '');
       return {
-        html: bodyHtmls.join(PAGE_BREAK_HTML),
+        html: joined,
         notes: notes.map((n) => ({
           id: n.id,
           quote: n.quote,
@@ -246,8 +254,10 @@
         ...(snap.layout || {})
       };
       pagesRoot.innerHTML = '';
-      splitPages(snap.html || EMPTY_PAGE).forEach((html) => {
-        pagesRoot.appendChild(makePageEl(html));
+      splitPages(snap.html || EMPTY_PAGE).forEach((html, i) => {
+        const el = makePageEl(html);
+        el.dataset.pageBreak = i === 0 ? 'start' : 'explicit';
+        pagesRoot.appendChild(el);
       });
       activePage = pagesRoot.querySelector('.doc-page');
       applyLayoutAttributes();
@@ -280,6 +290,9 @@
       if (!typingSince) { cancelTypingWork(); return; }
       cancelTypingWork();
       if (!pagesRoot) return;
+      // Reflow before the snapshot so undo restores a settled layout. This is
+      // the debounced path, so it never runs per keystroke.
+      repaginate(getPageEl());
       updateStatus();
       if (!skipInputRecord && !history.isApplying()) {
         history.record(serializeDoc(), { coalesce: true });
@@ -584,6 +597,8 @@
       pagesRoot.dataset.exactMargins = mar ? '1' : '0';
 
       updatePageHeadersAndFooters();
+      // A different page box means the content has to be redistributed.
+      schedulePaginate(pagesRoot.querySelector('.doc-page'));
     }
 
     function updateStatus() {
@@ -644,6 +659,166 @@
       zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX, e.clientY);
     }
 
+    /* ---------- pagination ----------
+       Word fills a page box and spills the remainder onto the next page.
+       Margo's pages were fixed containers that simply grew, so a document
+       without explicit breaks arrived as one very tall sheet. This measures
+       each page against its usable box, pushes the overflow forward, and pulls
+       content back when room opens up. Only pages this code created are
+       reversible; a page that came from a real break is never merged away. */
+
+    let paginating = false;
+    let paginateTimer = 0;
+    let composing = false;
+
+    function outerHeight(el) {
+      if (!el) return 0;
+      const cs = getComputedStyle(el);
+      return el.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    }
+
+    function usableHeight(pageEl) {
+      const cs = getComputedStyle(pageEl);
+      // The page box is min-height; offsetHeight is whatever the overflow has
+      // already stretched it to, which is exactly what we are correcting.
+      const box = parseFloat(cs.minHeight) || 0;
+      const padT = parseFloat(cs.paddingTop) || 0;
+      const padB = parseFloat(cs.paddingBottom) || 0;
+      return box - padT - padB
+        - outerHeight(pageEl.querySelector('.doc-page-header'))
+        - outerHeight(pageEl.querySelector('.doc-page-footer'));
+    }
+
+    function captureCaret() {
+      const sel = document.getSelection();
+      if (!sel || !sel.rangeCount || !pagesRoot) return null;
+      const r = sel.getRangeAt(0);
+      if (!pagesRoot.contains(r.startContainer)) return null;
+      return { node: r.startContainer, offset: r.startOffset };
+    }
+
+    function restoreCaret(saved) {
+      if (!saved || !saved.node || !saved.node.isConnected) return;
+      // Moving a node between pages keeps the node itself, so the captured
+      // container is still the right anchor - but focus has to follow it into
+      // whichever page body now owns it.
+      const el = saved.node.nodeType === 1 ? saved.node : saved.node.parentElement;
+      const page = el && el.closest ? el.closest('.doc-page') : null;
+      const body = page ? page.querySelector('.doc-page-body') : null;
+      try {
+        if (body) {
+          body.focus({ preventScroll: true });
+          setActivePage(page);
+        }
+        const sel = document.getSelection();
+        const range = document.createRange();
+        const max = saved.node.nodeType === 3
+          ? saved.node.nodeValue.length
+          : saved.node.childNodes.length;
+        range.setStart(saved.node, Math.min(saved.offset, max));
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch {}
+    }
+
+    function newAutoPage(afterPage) {
+      const el = makePageEl(EMPTY_PAGE);
+      el.dataset.pageBreak = 'auto';
+      const body = el.querySelector('.doc-page-body');
+      if (body) body.innerHTML = '';
+      afterPage.after(el);
+      return el;
+    }
+
+    function repaginate(startPage) {
+      if (!pagesRoot || paginating || composing) return false;
+      paginating = true;
+      const caret = captureCaret();
+      let changed = false;
+      try {
+        const all = pageList();
+        if (!all.length) return false;
+        // Content above the edit cannot have moved; start one page earlier so
+        // deletions can still pull text back up.
+        let i = Math.max(0, all.indexOf(startPage) - 1);
+        if (i < 0) i = 0;
+        let guard = 0;
+        while (i < pageList().length && guard++ < 200) {
+          const pages = pageList();
+          const page = pages[i];
+          const body = page.querySelector('.doc-page-body');
+          if (!body) { i++; continue; }
+          const limit = usableHeight(page);
+          if (limit <= 0) { i++; continue; }
+
+          const kids = Array.from(body.children);
+          let used = 0;
+          let spillAt = -1;
+          for (let k = 0; k < kids.length; k++) {
+            used += outerHeight(kids[k]);
+            // Never move the only block off a page, or nothing would ever fit
+            // and the loop would push content forward forever.
+            if (used > limit && k > 0) { spillAt = k; break; }
+          }
+
+          if (spillAt > 0) {
+            const next = (page.nextElementSibling
+              && page.nextElementSibling.classList.contains('doc-page')
+              && page.nextElementSibling.dataset.pageBreak === 'auto')
+              ? page.nextElementSibling
+              : newAutoPage(page);
+            const nextBody = next.querySelector('.doc-page-body');
+            const moving = kids.slice(spillAt);
+            for (let m = moving.length - 1; m >= 0; m--) {
+              nextBody.insertBefore(moving[m], nextBody.firstChild);
+            }
+            changed = true;
+            i++;
+            continue;
+          }
+
+          // Room left over: pull back from the following page, but only if the
+          // flow created it. An explicit break stays where the document put it.
+          const next = page.nextElementSibling;
+          if (next && next.classList.contains('doc-page') && next.dataset.pageBreak === 'auto') {
+            const nextBody = next.querySelector('.doc-page-body');
+            let room = limit - used;
+            while (nextBody && nextBody.firstElementChild) {
+              const first = nextBody.firstElementChild;
+              const h = outerHeight(first);
+              if (h > room) break;
+              body.appendChild(first);
+              room -= h;
+              changed = true;
+            }
+            if (nextBody && !nextBody.children.length && pageList().length > 1) {
+              next.remove();
+              changed = true;
+              continue; // same index: re-check against whatever follows now
+            }
+          }
+          i++;
+        }
+      } finally {
+        paginating = false;
+      }
+      if (changed) {
+        restoreCaret(caret);
+        lastPageCount = -1; // page count moved: headers and footers must catch up
+      }
+      return changed;
+    }
+
+    function schedulePaginate(startPage) {
+      if (paginateTimer) clearTimeout(paginateTimer);
+      const from = startPage || getPageEl();
+      paginateTimer = setTimeout(() => {
+        paginateTimer = 0;
+        if (repaginate(from)) updateStatus();
+      }, 90);
+    }
+
     function makePageEl(html) {
       const el = document.createElement('div');
       el.className = 'doc-page';
@@ -666,8 +841,12 @@
       el.appendChild(body);
       el.appendChild(footer);
       body.querySelectorAll('img').forEach((img) => {
-        img.loading = 'lazy';
+        // Not lazy: a page cannot be measured while its images still report
+        // zero height, and deferred loading would reflow the document under
+        // the reader as they scrolled into view. Mammoth inlines images as
+        // data URIs, so there is no network cost to pay here.
         img.decoding = 'async';
+        if (!img.complete) img.addEventListener('load', () => schedulePaginate(), { once: true });
       });
       return el;
     }
@@ -675,6 +854,7 @@
     function addPage(html) {
       if (!pagesRoot) return null;
       const el = makePageEl(html || EMPTY_PAGE);
+      el.dataset.pageBreak = 'explicit';
       pagesRoot.appendChild(el);
       setActivePage(el);
       ctx.markDirty();
@@ -2272,8 +2452,10 @@
         const fabIcon = host.querySelector('.doc-notes-fab-icon');
         if (fabIcon) fabIcon.innerHTML = window.MargoIcons.bell || window.MargoIcons.note;
 
-        splitPages(doc.html || EMPTY_PAGE).forEach((html) => {
-          pagesRoot.appendChild(makePageEl(html));
+        splitPages(doc.html || EMPTY_PAGE).forEach((html, i) => {
+          const el = makePageEl(html);
+          el.dataset.pageBreak = i === 0 ? 'start' : 'explicit';
+          pagesRoot.appendChild(el);
         });
         activePage = pagesRoot.querySelector('.doc-page');
 
@@ -2284,6 +2466,11 @@
 
         pagesRoot.addEventListener('input', () => {
           ctx.markDirty();
+          scheduleTypingWork();
+        });
+        pagesRoot.addEventListener('compositionstart', () => { composing = true; });
+        pagesRoot.addEventListener('compositionend', () => {
+          composing = false;
           scheduleTypingWork();
         });
         pagesRoot.addEventListener('focusin', (e) => {
@@ -2313,6 +2500,7 @@
           ctx.markDirty();
           updateStatus();
           recordNow();
+          schedulePaginate(page);
         });
 
         addBtn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -2335,6 +2523,9 @@
         refreshStates();
         history.seed(serializeDoc());
         setTimeout(() => { const body = getPage(); if (body) body.focus(); }, 60);
+        // Fonts and images settle a frame or two after mount; measuring before
+        // that would paginate against the wrong heights.
+        requestAnimationFrame(() => schedulePaginate(pagesRoot.querySelector('.doc-page')));
 
         function onSelChange() {
           const sel = document.getSelection();
@@ -2350,6 +2541,7 @@
 
         this._cleanup = () => {
           cancelTypingWork();
+          if (paginateTimer) { clearTimeout(paginateTimer); paginateTimer = 0; }
           if (statesRaf) { cancelAnimationFrame(statesRaf); statesRaf = 0; }
           document.removeEventListener('selectionchange', onSelChange);
           document.removeEventListener('keydown', onFindKeydown, true);
