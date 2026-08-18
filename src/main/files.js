@@ -26,11 +26,25 @@ turndown.use(gfm);
    not. We swap it for Margo's own marker once the HTML is out. */
 /* Underline has no default target in mammoth (findHtmlPathForRunProperty is
    called without one), so it is dropped unless the map claims it. */
+/* Word offers sixteen highlight values and Margo draws nine, so the rest land
+   on the nearest it can render. Without these entries mammoth drops the
+   highlight completely: findHtmlPath returns nothing for an unmapped colour. */
+const HIGHLIGHT_MAP = {
+  yellow: 'yellow', green: 'green', cyan: 'cyan', magenta: 'pink', red: 'red',
+  blue: 'blue', darkYellow: 'darkyellow', darkGreen: 'green', darkCyan: 'cyan',
+  darkMagenta: 'purple', darkBlue: 'blue', darkRed: 'red',
+  darkGray: 'gray', lightGray: 'gray', black: 'gray', white: 'gray'
+};
+
 const DOCX_STYLE_MAP = [
   "br[type='page'] => hr.margo-page-break",
   'u => u',
   'strike => s'
-];
+].concat(
+  Object.keys(HIGHLIGHT_MAP).map(
+    (word) => "highlight[color='" + word + "'] => mark.hl-" + HIGHLIGHT_MAP[word]
+  )
+);
 
 /* Mammoth's model carries the run font, run size, paragraph alignment and
    paragraph indent, but its HTML converter ignores all four, which is why an
@@ -77,6 +91,7 @@ function paragraphCss(p) {
   if (firstPt) css.push('text-indent:' + firstPt.toFixed(1) + 'pt');
   else if (hangPt) css.push('text-indent:-' + hangPt.toFixed(1) + 'pt');
   if (p.__margoLine) css.push('line-height:' + p.__margoLine);
+  if (p.__margoShade) css.push('background-color:#' + p.__margoShade);
   return css.join(';');
 }
 
@@ -102,6 +117,7 @@ function readDirectFormatting(xml) {
     colors.push(c && c[1].toLowerCase() !== 'auto' ? c[1] : null);
   }
   const lines = [];
+  const shades = [];
   const paraRe = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
   while ((m = paraRe.exec(xml))) {
     const s = /<w:spacing[^>]*w:line="(\d+)"[^>]*\/?>/.exec(m[0]);
@@ -112,8 +128,13 @@ function readDirectFormatting(xml) {
     } else {
       lines.push(null);
     }
+    /* Paragraph shading lives in pPr. A run-level w:shd is character shading
+       and would paint the whole paragraph if it were picked up here. */
+    const props = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(m[0]);
+    const shd = props ? /<w:shd[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(props[0]) : null;
+    shades.push(shd && shd[1].toLowerCase() !== 'ffffff' ? shd[1] : null);
   }
-  return { colors, lines };
+  return { colors, lines, shades };
 }
 
 function collectFormatting(doc, direct) {
@@ -128,6 +149,9 @@ function collectFormatting(doc, direct) {
   }
   if (direct.lines.length === paras.length) {
     paras.forEach((p, i) => { if (direct.lines[i]) p.__margoLine = direct.lines[i]; });
+  }
+  if (direct.shades && direct.shades.length === paras.length) {
+    paras.forEach((p, i) => { if (direct.shades[i]) p.__margoShade = direct.shades[i]; });
   }
   return { runs, paras };
 }
@@ -202,6 +226,27 @@ function inlineFormattingClasses(html, classCss) {
 }
 
 async function convertDocxHtml(filePath) {
+  try {
+    return await convertDocxHtmlInner(filePath);
+  } catch (err) {
+    /* A dangling relationship or malformed part makes mammoth throw while
+       writing HTML. Losing the formatting pass, or worst case falling back
+       to plain text, beats refusing to open the document at all. */
+    try {
+      const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+      return plain.value || '';
+    } catch {
+      const raw = await mammoth.extractRawText({ path: filePath }).catch(() => null);
+      if (raw && raw.value) {
+        return raw.value.split(/\r?\n/).filter(Boolean)
+          .map((line) => '<p>' + escapeHtml(line) + '</p>').join('');
+      }
+      throw err;
+    }
+  }
+}
+
+async function convertDocxHtmlInner(filePath) {
   const zip = await JSZip.loadAsync(await fsp.readFile(filePath));
   const docFile = zip.file('word/document.xml');
   const xml = docFile ? await docFile.async('string') : '';
@@ -219,7 +264,12 @@ async function convertDocxHtml(filePath) {
     return plain.value || '';
   }
 
-  const built = buildFormattingMap(model, direct);
+  let built;
+  try {
+    built = buildFormattingMap(model, direct);
+  } catch {
+    built = { styleMap: [], classCss: new Map(), runStyles: new Map(), paraStyles: new Map() };
+  }
   if (!built.styleMap.length) {
     const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
     return plain.value || '';
@@ -838,6 +888,40 @@ function nearestMargins(sideIn) {
   return best ? best.id : 'normal';
 }
 
+/* Reduce a header or footer part to its text. Margo shows one header and one
+   footer, so the first part of each kind is what it can carry; Word may also
+   define separate first-page and even-page variants. */
+function textFromWordPart(xml) {
+  return String(xml || '')
+    .replace(/<w:tab[^>]*\/?>/g, ' ')
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .split('\n').map((s) => s.trim()).filter(Boolean).join(' ')
+    .trim();
+}
+
+async function readDocxHeaderFooter(zip) {
+  const out = {};
+  const pick = async (prefix) => {
+    const names = Object.keys(zip.files)
+      .filter((f) => new RegExp('^word/' + prefix + '\\d*\\.xml$').test(f))
+      .sort();
+    for (const name of names) {
+      const text = textFromWordPart(await zip.file(name).async('string'));
+      // A part holding only a page number is not worth surfacing as text.
+      if (text && !/^[0-9\s]*$/.test(text)) return text;
+    }
+    return '';
+  };
+  const header = await pick('header');
+  const footer = await pick('footer');
+  if (header) out.headerText = header;
+  if (footer) out.footerText = footer;
+  return out;
+}
+
 async function readDocxSectionLayout(filePath) {
   try {
     const buf = await fsp.readFile(filePath);
@@ -846,10 +930,11 @@ async function readDocxSectionLayout(filePath) {
     if (!docFile) return null;
     const xml = await docFile.async('string');
 
-    // The body-level sectPr is the last one; earlier ones belong to sections
-    // above it. Margo carries a single layout, so the body default wins.
+    /* Margo carries one layout for the whole document. Take the first
+       section rather than the body default, so a document that changes
+       geometry part way through opens at the size its first pages use. */
     const sections = xml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/g);
-    const sect = sections && sections.length ? sections[sections.length - 1] : null;
+    const sect = sections && sections.length ? sections[0] : null;
     if (!sect) return null;
 
     const pgSz = (sect.match(/<w:pgSz[^>]*\/?>/) || [])[0];
@@ -898,6 +983,7 @@ async function readDocxSectionLayout(filePath) {
       }
     }
 
+    Object.assign(layout, await readDocxHeaderFooter(zip));
     return Object.keys(layout).length ? layout : null;
   } catch {
     return null;

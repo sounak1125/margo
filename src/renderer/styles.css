@@ -1081,13 +1081,19 @@ mark.margo-find-hit.margo-find-current {
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* Highlights */
-mark.hl-yellow { background-color: #fef08a; color: inherit; border-radius: 2px; }
-mark.hl-green  { background-color: #bbf7d0; color: inherit; border-radius: 2px; }
-mark.hl-cyan   { background-color: #a5f3fc; color: inherit; border-radius: 2px; }
-mark.hl-pink   { background-color: #fbcfe8; color: inherit; border-radius: 2px; }
-mark.hl-orange { background-color: #fed7aa; color: inherit; border-radius: 2px; }
-mark.hl-purple { background-color: #e9d5ff; color: inherit; border-radius: 2px; }
-mark.hl-red    { background-color: #fecaca; color: inherit; border-radius: 2px; }
+/* Marker colours as Word and Google Docs draw them, with square edges: a
+   rounded highlight reads as a chip rather than a pen stroke. The dark values
+   take white text, which is what Word does rather than leave it unreadable. */
+mark.hl-yellow     { background-color: #ffff00; color: #000; }
+mark.hl-green      { background-color: #00ff00; color: #000; }
+mark.hl-cyan       { background-color: #00ffff; color: #000; }
+mark.hl-pink       { background-color: #ff00ff; color: #000; }
+mark.hl-orange     { background-color: #ffa500; color: #000; }
+mark.hl-red        { background-color: #ff0000; color: #000; }
+mark.hl-gray       { background-color: #c0c0c0; color: #000; }
+mark.hl-blue       { background-color: #0000ff; color: #fff; }
+mark.hl-purple     { background-color: #800080; color: #fff; }
+mark.hl-darkyellow { background-color: #808000; color: #fff; }
 
 /* Callout cards */
 .margo-callout {

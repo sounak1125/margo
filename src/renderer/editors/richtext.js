@@ -21,14 +21,20 @@
     '#16a34a', '#059669', '#0284c7', '#2563eb',
     '#4f46e5', '#7c3aed', '#c026d3', '#db2777'
   ];
+  /* Word and Google Docs highlight with saturated marker colours, and these
+     are the exact values Word's sixteen w:highlight names resolve to. The old
+     pastel set did not match anything a document arrived with, so the same
+     highlight looked like a different colour in Margo than everywhere else. */
   const HL_COLORS = [
-    { name: 'Yellow', color: '#fef08a', class: 'hl-yellow' },
-    { name: 'Green', color: '#bbf7d0', class: 'hl-green' },
-    { name: 'Cyan', color: '#a5f3fc', class: 'hl-cyan' },
-    { name: 'Pink', color: '#fbcfe8', class: 'hl-pink' },
-    { name: 'Orange', color: '#fed7aa', class: 'hl-orange' },
-    { name: 'Purple', color: '#e9d5ff', class: 'hl-purple' },
-    { name: 'Red', color: '#fecaca', class: 'hl-red' }
+    { name: 'Yellow', color: '#ffff00', class: 'hl-yellow' },
+    { name: 'Green', color: '#00ff00', class: 'hl-green' },
+    { name: 'Cyan', color: '#00ffff', class: 'hl-cyan' },
+    { name: 'Magenta', color: '#ff00ff', class: 'hl-pink' },
+    { name: 'Blue', color: '#0000ff', class: 'hl-blue' },
+    { name: 'Red', color: '#ff0000', class: 'hl-red' },
+    { name: 'Dark Yellow', color: '#808000', class: 'hl-darkyellow' },
+    { name: 'Purple', color: '#800080', class: 'hl-purple' },
+    { name: 'Grey', color: '#c0c0c0', class: 'hl-gray' }
   ];
   const SHADING_COLORS = [
     '#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1',
