@@ -893,6 +893,21 @@
       return merged;
     }
 
+    function fitOversizedMedia(body, limit) {
+      let changed = false;
+      body.querySelectorAll('img').forEach((img) => {
+        const h = outerHeight(img);
+        if (h > limit && limit > 0) {
+          img.style.maxHeight = Math.floor(limit) + 'px';
+          img.style.height = 'auto';
+          img.style.width = 'auto';
+          img.style.maxWidth = '100%';
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     function repaginate(startPage) {
       if (!pagesRoot || paginating || composing) return false;
       paginating = true;
@@ -912,10 +927,13 @@
           const page = pages[i];
           const body = page.querySelector('.doc-page-body');
           if (!body) { i++; continue; }
-          const limit = usableHeight(page);
+          const columns = Math.max(1, parseInt(pagesRoot.dataset.columns, 10) || 1);
+          const columnHeight = usableHeight(page);
+          const limit = columnHeight * columns;
           if (limit <= 0) { i++; continue; }
 
           mergeContinued(body);
+          if (fitOversizedMedia(body, columnHeight)) changed = true;
           let kids = Array.from(body.children);
           let used = 0;
           let spillAt = -1;

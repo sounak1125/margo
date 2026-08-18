@@ -371,6 +371,20 @@ function excelFontFromStyle(st) {
   };
 }
 
+const THICK_BORDERS = ['medium', 'thick', 'double'];
+
+/* Margo's grid carries a single border style per cell rather than one per
+   edge, so the four Excel edges collapse to the nearest of what it can draw. */
+function excelBorderKind(border) {
+  if (!border) return null;
+  const edges = ['top', 'right', 'bottom', 'left']
+    .map((k) => border[k] && border[k].style)
+    .filter(Boolean);
+  if (!edges.length) return null;
+  if (edges.some((style) => THICK_BORDERS.includes(style))) return 'thick';
+  return edges.length === 4 ? 'all' : 'outer';
+}
+
 function extractCellStyle(cell) {
   const s = {};
   if (cell.font) {
@@ -397,6 +411,8 @@ function extractCellStyle(cell) {
   if (cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor && cell.fill.fgColor.argb) {
     s.fill = '#' + cell.fill.fgColor.argb.slice(-6);
   }
+  const border = excelBorderKind(cell.border);
+  if (border) s.border = border;
   if (cell.alignment) {
     if (cell.alignment.horizontal) s.align = cell.alignment.horizontal;
     if (cell.alignment.vertical) s.valign = cell.alignment.vertical;
@@ -423,10 +439,13 @@ function workbookToModel(wb) {
     const rows = [];
     const styles = {};
     const colWidths = {};
+    const rowHeights = {};
     ws.columns.forEach((col, idx) => {
       if (col && col.width) colWidths[idx] = col.width;
     });
     ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      // Excel keeps row height in points; the grid works in CSS pixels.
+      if (row.height) rowHeights[rowNumber - 1] = Math.round(row.height * 96 / 72);
       const arr = [];
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
         arr[colNumber - 1] = normalizeCell(cell.value);
@@ -442,10 +461,11 @@ function workbookToModel(wb) {
       rows,
       styles,
       colWidths,
+      rowHeights,
       charts: []
     });
   });
-  if (!sheets.length) sheets.push({ name: 'Sheet1', rows: [], styles: {}, colWidths: {}, charts: [] });
+  if (!sheets.length) sheets.push({ name: 'Sheet1', rows: [], styles: {}, colWidths: {}, rowHeights: {}, charts: [] });
   return { sheets, active: 0 };
 }
 
@@ -538,6 +558,59 @@ function titleOf(p) {
   return path.basename(p, path.extname(p));
 }
 
+/* html-to-docx 1.8.0 writes an empty w:rPr for <s>, <strike>, <del> and
+   text-decoration:line-through alike, so strikethrough never reached the file.
+   The text is fenced with private-use characters before conversion, and the
+   runs between the fences get w:strike once the document is built. Fencing the
+   text rather than matching elements afterwards keeps it correct when other
+   formatting nests inside the struck span and splits it across several runs. */
+const STRIKE_ON = '\uE000';
+const STRIKE_OFF = '\uE001';
+
+function fenceStrikeText(html) {
+  return String(html || '').replace(
+    /<(s|strike|del)(\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+    (m, tag, attrs, inner) => '<' + tag + (attrs || '') + '>' + STRIKE_ON + inner + STRIKE_OFF + '</' + tag + '>'
+  );
+}
+
+function applyStrikeFences(xml) {
+  let inside = false;
+  const out = xml.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+    const opens = run.indexOf(STRIKE_ON) >= 0;
+    const closes = run.indexOf(STRIKE_OFF) >= 0;
+    const struck = inside || opens;
+    if (opens && !closes) inside = true;
+    if (closes) inside = false;
+
+    let r = run.split(STRIKE_ON).join('').split(STRIKE_OFF).join('');
+    if (!struck) return r;
+    if (/<w:rPr\s*\/>/.test(r)) {
+      return r.replace(/<w:rPr\s*\/>/, '<w:rPr><w:strike w:val="true"/></w:rPr>');
+    }
+    if (/<w:rPr(?:\s[^>]*)?>/.test(r)) {
+      return r.replace(/<w:rPr(?:\s[^>]*)?>/, (m) => m + '<w:strike w:val="true"/>');
+    }
+    return r.replace(/^(<w:r(?:\s[^>]*)?>)/, '$1<w:rPr><w:strike w:val="true"/></w:rPr>');
+  });
+  // Any fence that survived (text outside a run) must not reach the reader.
+  return out.split(STRIKE_ON).join('').split(STRIKE_OFF).join('');
+}
+
+async function restoreStrikethrough(docxBuf) {
+  try {
+    const zip = await JSZip.loadAsync(docxBuf);
+    const file = zip.file('word/document.xml');
+    if (!file) return docxBuf;
+    const xml = await file.async('string');
+    if (xml.indexOf(STRIKE_ON) < 0) return docxBuf;
+    zip.file('word/document.xml', applyStrikeFences(xml));
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  } catch {
+    return docxBuf;
+  }
+}
+
 /* Page dimensions in twips, portrait-oriented: html-to-docx swaps width and
    height itself when the orientation is landscape. Without this every export
    came out US Letter no matter what the document actually was. */
@@ -567,7 +640,7 @@ function docxPageSize(layout) {
 async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
   const htmlString =
     `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title || 'Document')}</title></head>` +
-    `<body>${bodyHtml}</body></html>`;
+    `<body>${fenceStrikeText(bodyHtml)}</body></html>`;
 
   const marginPresets = {
     normal: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
@@ -612,7 +685,8 @@ async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
     : null;
 
   const buf = await HTMLtoDOCX(htmlString, headerHtml, docOpts, footerHtml);
-  return Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  const withStrike = await restoreStrikethrough(Buffer.isBuffer(buf) ? buf : Buffer.from(buf));
+  return Buffer.isBuffer(withStrike) ? withStrike : Buffer.from(withStrike);
 }
 
 function parseThumbDataUrl(dataUrl) {
