@@ -99,6 +99,37 @@
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
 
+  const BLOCK_TEXT_TAGS = new Set([
+    'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL', 'TR', 'TD', 'TH',
+    'TABLE', 'BLOCKQUOTE', 'PRE', 'SECTION', 'ARTICLE', 'HR', 'FIGURE', 'FIGCAPTION'
+  ]);
+
+  /* Layout-free stand-in for innerText. Reading innerText forces a synchronous
+     reflow of the entire document, which is far too expensive to run on the
+     typing path; this walks text nodes instead and only approximates the
+     whitespace collapsing innerText does - close enough for word/char counts. */
+  function collectText(node, out) {
+    for (let n = node.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 3) { out.push(n.nodeValue); continue; }
+      if (n.nodeType !== 1) continue;
+      const tag = n.tagName;
+      if (tag === 'BR') { out.push('\n'); continue; }
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      collectText(n, out);
+      if (BLOCK_TEXT_TAGS.has(tag)) out.push('\n');
+    }
+    return out;
+  }
+
+  function plainText(el) {
+    if (!el) return '';
+    return collectText(el, [])
+      .join('')
+      .replace(/[ \t\u00a0]+/g, ' ')
+      .replace(/ *\n[ \n]*/g, '\n')
+      .trim();
+  }
+
   function create(ctx) {
     let pagesRoot = null;
     let scrollEl = null;
@@ -128,6 +159,8 @@
     let activeRibbonTab = 'home';
     const history = window.MargoHistory.create();
     let skipInputRecord = false;
+    let lastPageCount = -1;
+    let statesRaf = 0;
 
     // Layout configuration state
     let layout = {
@@ -224,13 +257,51 @@
       if (body) body.focus();
     }
 
+    /* Keystrokes must stay cheap. updateStatus() reads the whole document and
+       serializeDoc() deep-clones it, so both are deferred until the user pauses
+       (or TYPING_MAX_MS of unbroken typing has elapsed) instead of running once
+       per character. */
+    const TYPING_IDLE_MS = 180;
+    const TYPING_MAX_MS = 900;
+    let typingTimer = 0;
+    let typingSince = 0;
+
+    function cancelTypingWork() {
+      if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
+      typingSince = 0;
+    }
+
+    function flushTypingWork() {
+      if (!typingSince) { cancelTypingWork(); return; }
+      cancelTypingWork();
+      if (!pagesRoot) return;
+      updateStatus();
+      if (!skipInputRecord && !history.isApplying()) {
+        history.record(serializeDoc(), { coalesce: true });
+      }
+    }
+
+    function scheduleTypingWork() {
+      const now = Date.now();
+      if (!typingSince) typingSince = now;
+      else if (now - typingSince >= TYPING_MAX_MS) { flushTypingWork(); return; }
+      if (typingTimer) clearTimeout(typingTimer);
+      typingTimer = setTimeout(flushTypingWork, TYPING_IDLE_MS);
+    }
+
+    function scheduleRefreshStates() {
+      if (statesRaf) return;
+      statesRaf = requestAnimationFrame(() => { statesRaf = 0; refreshStates(); });
+    }
+
     function recordNow() {
+      cancelTypingWork();
       if (!pagesRoot || history.isApplying()) return;
       history.record(serializeDoc());
     }
 
-    function undo() { history.undo(restoreDoc); }
-    function redo() { history.redo(restoreDoc); }
+    function undo() { flushTypingWork(); history.undo(restoreDoc); }
+    function redo() { flushTypingWork(); history.redo(restoreDoc); }
 
     function exec(cmd, value, withCss) {
       const page = getPage();
@@ -485,7 +556,9 @@
 
     function updateStatus() {
       const pages = pageList();
-      const text = pages.map((p) => p.innerText || '').join('\n');
+      const text = pages
+        .map((p) => plainText(p.querySelector('.doc-page-body') || p))
+        .join('\n');
       const words = (text.trim().match(/\S+/g) || []).length;
       const n = pages.length;
       const pagePart = n === 1 ? '1 page' : n + ' pages';
@@ -495,7 +568,14 @@
         `${pagePart} · ${words} word${words === 1 ? '' : 's'} · ${text.length} chars · ${geom}${z}`,
         'Word document'
       );
-      updatePageHeadersAndFooters();
+      /* "Page N of M" only moves when pages are added or removed. Rewriting
+         every header and footer on each status pass invalidated layout across
+         the whole document, which forced the next measurement to reflow
+         everything again. */
+      if (pages.length !== lastPageCount) {
+        lastPageCount = pages.length;
+        updatePageHeadersAndFooters();
+      }
       if (outlineRail && !outlineRail.classList.contains('hidden')) renderOutline();
     }
 
@@ -507,6 +587,10 @@
       const mx = clientX != null ? clientX - rect.left : scrollEl.clientWidth / 2;
       const my = clientY != null ? clientY - rect.top : scrollEl.clientHeight / 2;
       pagesRoot.style.zoom = String(next);
+      /* At zoom > 1 the container measures fewer CSS px, so the responsive
+         max-width would shrink the page and re-wrap every line. Drop it while
+         zoomed and let the scroll container pan instead. */
+      pagesRoot.dataset.zoomed = next > 1 ? '1' : '0';
       if (prev !== next) {
         const ratio = next / prev;
         scrollEl.scrollLeft = (scrollEl.scrollLeft + mx) * ratio - mx;
@@ -1157,7 +1241,7 @@
         const item = document.createElement('div');
         const tag = h.tagName.toLowerCase();
         item.className = `doc-outline-item ${tag}`;
-        const title = (h.innerText || '').trim() || 'Untitled section';
+        const title = (h.textContent || '').trim() || 'Untitled section';
         item.innerHTML = `<span class="doc-outline-tag">${tag.toUpperCase()}</span><span>${escapeHtml(title)}</span>`;
         item.addEventListener('click', () => {
           h.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2165,8 +2249,7 @@
 
         pagesRoot.addEventListener('input', () => {
           ctx.markDirty();
-          updateStatus();
-          if (!skipInputRecord && !history.isApplying()) history.record(serializeDoc(), { coalesce: true });
+          scheduleTypingWork();
         });
         pagesRoot.addEventListener('focusin', (e) => {
           const p = e.target.closest && e.target.closest('.doc-page');
@@ -2226,11 +2309,13 @@
           const page = p && p.closest && p.closest('.doc-page');
           if (page && pagesRoot.contains(page)) {
             setActivePage(page);
-            refreshStates();
+            scheduleRefreshStates();
           }
         }
 
         this._cleanup = () => {
+          cancelTypingWork();
+          if (statesRaf) { cancelAnimationFrame(statesRaf); statesRaf = 0; }
           document.removeEventListener('selectionchange', onSelChange);
           document.removeEventListener('keydown', onFindKeydown, true);
           if (pagesRoot) {

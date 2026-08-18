@@ -712,14 +712,16 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   display: flex;
   flex-direction: column;
   align-items: center;
+  align-items: safe center;
   gap: 24px;
   padding: 26px 20px 80px;
-  transition: all 0.2s ease;
+  transition: padding 0.2s ease, gap 0.2s ease;
 }
 
 .doc-page {
   position: relative;
-  width: min(816px, calc(100% - 48px));
+  contain: layout;
+  width: 816px; max-width: calc(100% - 48px);
   min-height: 1056px;
   margin: 0;
   background: var(--page);
@@ -743,16 +745,23 @@ body.sidebar-resizing .sidebar { transition: none !important; }
 }
 
 /* Page Sizes */
-.doc-pages[data-size="letter"] .doc-page { width: min(816px, calc(100% - 48px)); min-height: 1056px; }
-.doc-pages[data-size="a4"] .doc-page { width: min(794px, calc(100% - 48px)); min-height: 1123px; }
-.doc-pages[data-size="legal"] .doc-page { width: min(816px, calc(100% - 48px)); min-height: 1344px; }
-.doc-pages[data-size="executive"] .doc-page { width: min(700px, calc(100% - 48px)); min-height: 1008px; }
+.doc-pages[data-size="letter"] .doc-page { width: 816px; max-width: calc(100% - 48px); min-height: 1056px; }
+.doc-pages[data-size="a4"] .doc-page { width: 794px; max-width: calc(100% - 48px); min-height: 1123px; }
+.doc-pages[data-size="legal"] .doc-page { width: 816px; max-width: calc(100% - 48px); min-height: 1344px; }
+.doc-pages[data-size="executive"] .doc-page { width: 700px; max-width: calc(100% - 48px); min-height: 1008px; }
 
 /* Orientation Landscape */
-.doc-pages[data-orientation="landscape"][data-size="letter"] .doc-page { width: min(1056px, calc(100% - 48px)); min-height: 816px; }
-.doc-pages[data-orientation="landscape"][data-size="a4"] .doc-page { width: min(1123px, calc(100% - 48px)); min-height: 794px; }
-.doc-pages[data-orientation="landscape"][data-size="legal"] .doc-page { width: min(1344px, calc(100% - 48px)); min-height: 816px; }
-.doc-pages[data-orientation="landscape"][data-size="executive"] .doc-page { width: min(1008px, calc(100% - 48px)); min-height: 700px; }
+.doc-pages[data-orientation="landscape"][data-size="letter"] .doc-page { width: 1056px; max-width: calc(100% - 48px); min-height: 816px; }
+.doc-pages[data-orientation="landscape"][data-size="a4"] .doc-page { width: 1123px; max-width: calc(100% - 48px); min-height: 794px; }
+.doc-pages[data-orientation="landscape"][data-size="legal"] .doc-page { width: 1344px; max-width: calc(100% - 48px); min-height: 816px; }
+.doc-pages[data-orientation="landscape"][data-size="executive"] .doc-page { width: 1008px; max-width: calc(100% - 48px); min-height: 700px; }
+
+/* Zoom keeps the page at its true width and lets the scroll container pan.
+   Without this the container measures fewer CSS px as zoom rises, the
+   responsive cap kicks in, and every line re-wraps to a narrower measure.
+   Must sit after the size/orientation rules and match their specificity. */
+.doc-pages[data-zoomed="1"][data-size] .doc-page,
+.doc-pages[data-zoomed="1"] .doc-page { max-width: none; }
 
 /* Margins */
 .doc-page { padding: 54px 72px 64px; }
