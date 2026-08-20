@@ -1333,11 +1333,34 @@
       let found = [];
       let foundIdx = 0;
 
+      function clearSheetFindHits() {
+        if (!gridScroll) return;
+        gridScroll.querySelectorAll('td.sheet-find-hit, td.sheet-find-current').forEach((td) => {
+          td.classList.remove('sheet-find-hit', 'sheet-find-current');
+        });
+      }
+
+      function paintSheetFindHits() {
+        clearSheetFindHits();
+        found.forEach((cell, i) => {
+          const td = tdAt(cell.r, cell.c);
+          if (!td) return;
+          td.classList.add('sheet-find-hit');
+          if (i === foundIdx) td.classList.add('sheet-find-current');
+        });
+      }
+
       function doFind() {
+        const keep = document.activeElement === input;
         found = [];
         foundIdx = 0;
         const q = input.value.trim().toLowerCase();
-        if (!q) { status.textContent = 'Enter text or number to find'; return; }
+        if (!q) {
+          status.textContent = 'Enter text or number to find';
+          clearSheetFindHits();
+          if (keep) input.focus();
+          return;
+        }
 
         sheet().rows.forEach((row, r) => {
           (row || []).forEach((val, c) => {
@@ -1353,6 +1376,8 @@
         } else {
           status.textContent = 'No matches found';
         }
+        paintSheetFindHits();
+        if (keep) input.focus();
       }
 
       input.addEventListener('input', doFind);
@@ -1368,10 +1393,15 @@
               foundIdx = (foundIdx + 1) % found.length;
               status.textContent = `Match ${foundIdx + 1} of ${found.length}`;
               select(found[foundIdx].r, found[foundIdx].c);
+              paintSheetFindHits();
             }
           }
         }
-      ]);
+      ]).then(() => {
+        found = [];
+        foundIdx = 0;
+        clearSheetFindHits();
+      });
     }
 
     /* ---------- Function Wizard Modal (fx) ---------- */

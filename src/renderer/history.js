@@ -3,6 +3,34 @@
    on mount so the first undo returns to the loaded document. */
 (function () {
   function clone(value) {
+    if (value == null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(clone);
+
+    /* Word snapshot: html is an immutable string; avoid JSON round-trip of MB payloads. */
+    if (typeof value.html === 'string') {
+      return {
+        html: value.html,
+        notes: Array.isArray(value.notes) ? value.notes.map((n) => ({ ...n })) : value.notes,
+        layout: value.layout ? { ...value.layout } : value.layout
+      };
+    }
+
+    /* Markdown snapshot */
+    if (typeof value.text === 'string' && 'start' in value && 'end' in value) {
+      return { text: value.text, start: value.start, end: value.end };
+    }
+
+    /* Sheet snapshot — nested grid still needs a deep clone */
+    if (Array.isArray(value.sheets)) {
+      return {
+        sheets: JSON.parse(JSON.stringify(value.sheets)),
+        active: value.active,
+        sel: value.sel ? { ...value.sel } : value.sel,
+        selEnd: value.selEnd ? { ...value.selEnd } : value.selEnd,
+        autoFilterActive: value.autoFilterActive
+      };
+    }
+
     return JSON.parse(JSON.stringify(value));
   }
 

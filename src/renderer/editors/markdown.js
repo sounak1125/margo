@@ -55,10 +55,12 @@
     function render() {
       const raw = marked.parse(textarea.value);
       preview.innerHTML = DOMPurify.sanitize(raw);
+      if (findOpen) paintFindHighlights();
     }
     function scheduleRender() {
       clearTimeout(renderTimer);
-      renderTimer = setTimeout(render, 110);
+      const delay = zoom > 1 && mode !== 'write' ? 320 : 110;
+      renderTimer = setTimeout(render, delay);
     }
     function updateStatus() {
       const text = textarea.value;
@@ -310,6 +312,7 @@
     /* ---------- find & replace ---------- */
     let hostEl = null;
     let findBar = null, findInput = null, replaceInput = null, findCountEl = null;
+    let findOverlay = null;
     let findHits = [];
     let findIndex = -1;
     let findOpen = false;
@@ -345,16 +348,122 @@
       else findCountEl.textContent = (findIndex + 1) + ' / ' + findHits.length;
     }
 
+    function isFindFieldFocused() {
+      const el = document.activeElement;
+      return el === findInput || el === replaceInput;
+    }
+
+    function syncFindOverlayScroll() {
+      if (!findOverlay || !textarea) return;
+      findOverlay.style.width = textarea.clientWidth + 'px';
+      findOverlay.style.transform = `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`;
+    }
+
+    function unwrapPreviewFindMarks() {
+      if (!preview) return;
+      preview.querySelectorAll('mark.margo-find-hit').forEach((m) => {
+        const parent = m.parentNode;
+        if (!parent) return;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        m.remove();
+        parent.normalize();
+      });
+    }
+
+    function paintFindOverlay() {
+      if (!findOverlay || !textarea) return;
+      const stack = textarea.parentElement;
+      const q = (findInput && findInput.value || '').trim();
+      if (!q || !findHits.length) {
+        findOverlay.innerHTML = '';
+        if (stack) stack.classList.remove('find-active');
+        return;
+      }
+      if (stack) stack.classList.add('find-active');
+      const text = textarea.value;
+      let html = '';
+      let i = 0;
+      findHits.forEach((hit, n) => {
+        html += escapeHtml(text.slice(i, hit.start));
+        const cls = n === findIndex ? 'margo-find-hit margo-find-current' : 'margo-find-hit';
+        html += `<mark class="${cls}">` + escapeHtml(text.slice(hit.start, hit.end)) + '</mark>';
+        i = hit.end;
+      });
+      html += escapeHtml(text.slice(i));
+      findOverlay.innerHTML = html;
+      syncFindOverlayScroll();
+    }
+
+    function paintPreviewFindHits() {
+      unwrapPreviewFindMarks();
+      const q = (findInput && findInput.value || '').trim();
+      if (!q || !preview || !findHits.length) return;
+      const lower = q.toLowerCase();
+      const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+          if (node.parentElement && node.parentElement.closest('mark.margo-find-hit')) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const textNodes = [];
+      let n;
+      while ((n = walker.nextNode())) textNodes.push(n);
+      const marks = [];
+      textNodes.forEach((textNode) => {
+        const text = textNode.nodeValue;
+        const lowerText = text.toLowerCase();
+        let start = 0;
+        const parts = [];
+        let idx;
+        while ((idx = lowerText.indexOf(lower, start)) !== -1) {
+          if (idx > start) parts.push(document.createTextNode(text.slice(start, idx)));
+          const mark = document.createElement('mark');
+          mark.className = 'margo-find-hit';
+          mark.textContent = text.slice(idx, idx + q.length);
+          parts.push(mark);
+          marks.push(mark);
+          start = idx + q.length;
+        }
+        if (start === 0) return;
+        if (start < text.length) parts.push(document.createTextNode(text.slice(start)));
+        const parent = textNode.parentNode;
+        parts.forEach((p) => parent.insertBefore(p, textNode));
+        parent.removeChild(textNode);
+      });
+      const cur = marks[findIndex] || marks[0];
+      if (cur) {
+        cur.classList.add('margo-find-current');
+        cur.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function paintFindHighlights() {
+      const el = document.activeElement;
+      const keep = el === findInput || el === replaceInput;
+      paintFindOverlay();
+      paintPreviewFindHits();
+      if (keep && el && el.isConnected) el.focus();
+    }
+
+    function clearFindHighlights() {
+      if (findOverlay) findOverlay.innerHTML = '';
+      if (textarea && textarea.parentElement) textarea.parentElement.classList.remove('find-active');
+      unwrapPreviewFindMarks();
+    }
+
     function selectHit() {
       if (findIndex < 0 || !findHits[findIndex]) {
         updateFindCount();
+        paintFindHighlights();
         return;
       }
       const hit = findHits[findIndex];
-      textarea.focus();
+      if (!isFindFieldFocused()) textarea.focus();
       textarea.setSelectionRange(hit.start, hit.end);
       scrollToOffset(hit.start);
       updateFindCount();
+      paintFindHighlights();
     }
 
     function runFind(query) {
@@ -413,6 +522,7 @@
       if (findBar) findBar.classList.add('hidden');
       findHits = [];
       findIndex = -1;
+      clearFindHighlights();
       updateFindCount();
     }
 
@@ -484,12 +594,18 @@
             `<div class="doc-outline-list"></div>` +
           `</aside>` +
           `<div class="md-wrap mode-split">
-             <div class="md-pane md-pane-editor"><textarea class="md-input" spellcheck="false" placeholder="# Start writing…"></textarea></div>
+             <div class="md-pane md-pane-editor">
+               <div class="md-input-stack">
+                 <div class="md-find-overlay-clip"><pre class="md-find-overlay" aria-hidden="true"></pre></div>
+                 <textarea class="md-input" spellcheck="false" placeholder="# Start writing…"></textarea>
+               </div>
+             </div>
              <div class="md-pane md-pane-preview"><article class="md-preview"></article></div>
            </div>`;
         wrap = host.querySelector('.md-wrap');
         textarea = host.querySelector('.md-input');
         preview = host.querySelector('.md-preview');
+        findOverlay = host.querySelector('.md-find-overlay');
         outlineRail = host.querySelector('.doc-outline-rail');
         textarea.value = doc.markdown || '';
         findBar = null;
@@ -505,6 +621,14 @@
           scheduleRender();
           updateStatus();
           if (!skipInputRecord && !history.isApplying()) history.record(capture(), { coalesce: true });
+          if (findOpen && findInput) {
+            findHits = collectHits(findInput.value);
+            if (!findHits.length) findIndex = -1;
+            else if (findIndex < 0) findIndex = 0;
+            else if (findIndex >= findHits.length) findIndex = findHits.length - 1;
+            updateFindCount();
+            paintFindHighlights();
+          }
         });
         textarea.addEventListener('keydown', (e) => {
           if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); surround('**', '**', 'bold'); }
@@ -521,6 +645,7 @@
         });
         // proportional scroll sync editor -> preview
         textarea.addEventListener('scroll', () => {
+          syncFindOverlayScroll();
           if (mode !== 'split') return;
           const ratio = textarea.scrollTop / Math.max(1, textarea.scrollHeight - textarea.clientHeight);
           const pv = preview.parentElement;

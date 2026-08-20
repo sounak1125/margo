@@ -99,16 +99,35 @@
         await wait(80);
         const bar = document.querySelector('.tab-pane:not([hidden]) .doc-find-bar') || document.querySelector('.doc-find-bar');
         t('md find bar opens', !!(bar && !bar.classList.contains('hidden')));
-        const findIn = bar && bar.querySelector('.doc-find-input');
+        const findIn = bar && bar.querySelector('.doc-find-input:not(.doc-replace-input)');
+        const replaceIn = bar && bar.querySelector('.doc-replace-input');
         if (findIn) {
+          findIn.focus();
+          findIn.value = 'M';
+          findIn.dispatchEvent(new Event('input', { bubbles: true }));
+          t('md find keeps focus after first character', document.activeElement === findIn);
           findIn.value = 'Margo';
           findIn.dispatchEvent(new Event('input', { bubbles: true }));
           await wait(40);
+          t('md find keeps focus while typing', document.activeElement === findIn);
+          t('md find highlights matches', !!document.querySelector('.tab-pane:not([hidden]) .md-find-overlay mark.margo-find-hit'));
+          t('md find marks current match', !!document.querySelector('.tab-pane:not([hidden]) .md-find-overlay mark.margo-find-current'));
+          t('md preview highlights matches', !!document.querySelector('.tab-pane:not([hidden]) .md-preview mark.margo-find-hit'));
+          t('md find still focused after highlight', document.activeElement === findIn);
         }
         t('md find selects a match', !!(ta && ta.selectionEnd > ta.selectionStart),
           ta ? `${ta.selectionStart}-${ta.selectionEnd}` : 'no textarea');
+        if (replaceIn) {
+          replaceIn.focus();
+          replaceIn.value = 'X';
+          replaceIn.dispatchEvent(new Event('input', { bubbles: true }));
+          t('md replace keeps focus while typing', document.activeElement === replaceIn);
+        }
         const mdFindClose = document.querySelector('.tab-pane:not([hidden]) .doc-find-close') || document.querySelector('.doc-find-close');
         mdFindClose && mdFindClose.click();
+        t('md find highlights clear on close',
+          !document.querySelector('.tab-pane:not([hidden]) .md-find-overlay mark.margo-find-hit')
+          && !document.querySelector('.tab-pane:not([hidden]) .md-preview mark.margo-find-hit'));
       }
       ta.value += '\n\nSmoke edit line.';
       ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -189,13 +208,113 @@
           || document.querySelectorAll('.doc-page').length));
       t('doc add page button present', !!document.querySelector('.tab-pane:not([hidden]) .doc-add-page')
         || !!document.querySelector('.doc-add-page'));
+      {
+        const pane = document.querySelector('.tab-pane:not([hidden])') || document;
+        const bodies = pane.querySelectorAll('.doc-page-body');
+        const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+        if (bodies.length >= 2) {
+          bodies[0].insertAdjacentHTML('beforeend',
+            `<p>CopyPageOne</p><img src="${pixel}" alt="p1">`);
+          bodies[1].insertAdjacentHTML('afterbegin',
+            `<p>CopyPageTwo</p><img src="${pixel}" alt="p2">`);
+        }
+        const edCopy = T.getEditor();
+        if (edCopy && edCopy.commands && edCopy.commands.selectAll) edCopy.commands.selectAll();
+        const payload = edCopy && edCopy._test && edCopy._test.copyPayload && edCopy._test.copyPayload();
+        t('doc copy includes both pages',
+          !!(payload && payload.text.includes('CopyPageOne') && payload.text.includes('CopyPageTwo')),
+          payload ? payload.text.slice(0, 180) : 'no payload');
+        t('doc copy includes images from both pages',
+          !!(payload && (payload.html.match(/<img/gi) || []).length >= 2),
+          payload ? String((payload.html.match(/<img/gi) || []).length) : 'no payload');
+      }
       if (edDoc && edDoc.commands && edDoc.commands.zoomIn) {
+        const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+        const perfPage = document.querySelector('.tab-pane:not([hidden]) .doc-page-body')
+          || document.querySelector('.doc-page-body');
+        if (perfPage) {
+          for (let i = 0; i < 6; i++) {
+            perfPage.insertAdjacentHTML('beforeend',
+              `<p>PerfChunk${i}</p><img src="${pixel}" alt="perf${i}">`);
+          }
+        }
+        const pagesBefore = document.querySelectorAll('.tab-pane:not([hidden]) .doc-page').length
+          || document.querySelectorAll('.doc-page').length;
+        edDoc.commands.zoomIn();
         edDoc.commands.zoomIn();
         await wait(40);
         const pagesEl = document.querySelector('.tab-pane:not([hidden]) .doc-pages') || document.querySelector('.doc-pages');
         t('doc zoom in applies', (pagesEl || {}).style?.zoom === '1.1'
           || parseFloat((pagesEl || {}).style?.zoom) > 1);
+        const edPerf = T.getEditor();
+        const testApi = edPerf && edPerf._test;
+        const perfBlock = perfPage && perfPage.querySelector('p');
+        const perfSheet = perfPage && perfPage.closest('.doc-page');
+        if (testApi && perfBlock && perfSheet) {
+          const z = testApi.currentZoom();
+          t('doc zoom perf level above 100%', z > 1, String(z));
+          const offH = perfBlock.offsetHeight;
+          const layH = testApi.layoutHeight(perfBlock);
+          t('doc zoom layout height matches offset',
+            layH > 0 && Math.abs(layH - offH) / Math.max(offH, 1) < 0.2,
+            `layout=${layH} offset=${offH}`);
+          const budget = testApi.usableHeight(perfSheet);
+          t('doc zoom page budget sane', budget > layH, `budget=${budget} block=${layH}`);
+        }
+        if (perfPage) {
+          perfPage.focus();
+          perfPage.dispatchEvent(new Event('input', { bubbles: true }));
+          perfPage.insertAdjacentText('beforeend', 'Z');
+          perfPage.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        await wait(50);
+        const pagesMid = document.querySelectorAll('.tab-pane:not([hidden]) .doc-page').length
+          || document.querySelectorAll('.doc-page').length;
+        t('doc zoom typing does not explode pages', pagesMid <= pagesBefore + 2,
+          `before=${pagesBefore} mid=${pagesMid}`);
+        t('doc edit marks dirty when zoomed', T.state.dirty === true);
+        if (testApi && testApi.flushTypingWork) {
+          testApi.flushTypingWork();
+          t('doc zoom flush schedules paginate not sync',
+            testApi.paginateScheduled() && !testApi.paginating(),
+            String(testApi.paginateScheduled()));
+          await wait(30);
+          const pagesAfterFlush = testApi.pageCount();
+          t('doc zoom flush keeps page count stable', pagesAfterFlush <= pagesBefore + 2,
+            `before=${pagesBefore} after=${pagesAfterFlush}`);
+        }
         edDoc.commands.zoomReset();
+        t('doc zoom reset returns to 100%', testApi && testApi.currentZoom() === 1);
+      }
+      {
+        const edFind = T.getEditor();
+        if (edFind && edFind.commands && edFind.commands.find) edFind.commands.find();
+        await wait(80);
+        const bar = document.querySelector('.tab-pane:not([hidden]) .doc-find-bar') || document.querySelector('.doc-find-bar');
+        const findIn = bar && bar.querySelector('.doc-find-input:not(.doc-replace-input)');
+        const replaceIn = bar && bar.querySelector('.doc-replace-input');
+        t('doc find bar opens', !!(bar && !bar.classList.contains('hidden') && findIn));
+        if (findIn) {
+          findIn.focus();
+          findIn.value = 'W';
+          findIn.dispatchEvent(new Event('input', { bubbles: true }));
+          t('doc find keeps focus after first character', document.activeElement === findIn);
+          findIn.value = 'Welcome';
+          findIn.dispatchEvent(new Event('input', { bubbles: true }));
+          t('doc find keeps focus while typing', document.activeElement === findIn);
+          t('doc find highlights matches', document.querySelectorAll('.tab-pane:not([hidden]) mark.margo-find-hit').length > 0);
+          t('doc find marks current match', !!document.querySelector('.tab-pane:not([hidden]) mark.margo-find-current'));
+          t('doc find still focused after highlight', document.activeElement === findIn);
+        }
+        if (replaceIn) {
+          replaceIn.focus();
+          replaceIn.value = 'Hi';
+          replaceIn.dispatchEvent(new Event('input', { bubbles: true }));
+          t('doc replace keeps focus while typing', document.activeElement === replaceIn);
+        }
+        const close = bar && bar.querySelector('.doc-find-close');
+        if (close) close.click();
+        t('doc find highlights clear on close', !document.querySelector('.tab-pane:not([hidden]) mark.margo-find-hit'));
       }
       // themed save modal (Don't Save)
       T.state.dirty = true;
@@ -302,8 +421,25 @@
       await wait(80);
       t('pdf find bar opens', !!document.querySelector('.tab-pane:not([hidden]) .pdf-scroll') &&
         !!(document.querySelector('.tab-pane:not([hidden]) .doc-find-bar') && !document.querySelector('.tab-pane:not([hidden]) .doc-find-bar').classList.contains('hidden')));
+      {
+        const pdfBar = document.querySelector('.tab-pane:not([hidden]) .doc-find-bar');
+        const pdfFind = pdfBar && pdfBar.querySelector('.doc-find-input');
+        if (pdfFind) {
+          pdfFind.focus();
+          pdfFind.value = 'e';
+          pdfFind.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(40);
+          t('pdf find keeps focus while typing', document.activeElement === pdfFind);
+          const hits = document.querySelectorAll('.tab-pane:not([hidden]) .pdf-find-hit');
+          const countEl = pdfBar.querySelector('.doc-find-count');
+          t('pdf find highlights matches', hits.length > 0 || !!(countEl && countEl.textContent.includes('0')));
+          if (hits.length) t('pdf find marks current match', !!document.querySelector('.tab-pane:not([hidden]) .pdf-find-hit.current'));
+          t('pdf find still focused after highlight', document.activeElement === pdfFind);
+        }
+      }
       const pdfFindClose = document.querySelector('.tab-pane:not([hidden]) .doc-find-close');
       pdfFindClose && pdfFindClose.click();
+      t('pdf find highlights clear on close', !document.querySelector('.tab-pane:not([hidden]) .pdf-find-hit'));
       await shot('editor-pdf.png');
 
       const extracted = await ped._test.extract();

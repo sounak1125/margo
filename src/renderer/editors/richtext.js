@@ -142,6 +142,9 @@
     let hostEl = null;
     let activePage = null;
     let savedRange = null;
+    let selectDragging = false;
+    let selectAnchor = null;
+    let crossPageRange = null;
     let zoom = 1;
     const stateButtons = {};
     let blockSelect = null, familySelect = null, variantSelect = null, sizeSelect = null;
@@ -162,6 +165,7 @@
     let findHits = [];
     let findIndex = -1;
     let findOpen = false;
+    let findHighlighting = false;
     let activeRibbonTab = 'home';
     const history = window.MargoHistory.create();
     let skipInputRecord = false;
@@ -201,7 +205,7 @@
     }
 
     function serializeDoc() {
-      unwrapFindMarks();
+      if (findOpen) unwrapFindMarks();
       const pages = pageList();
       const bodyHtmls = pages.map((p) => {
         const src = p.querySelector('.doc-page-body') || p;
@@ -295,6 +299,7 @@
        per character. */
     const TYPING_IDLE_MS = 180;
     const TYPING_MAX_MS = 900;
+    const TYPING_PAGINATE_IDLE_MS = 450;
     let typingTimer = 0;
     let typingSince = 0;
 
@@ -307,9 +312,10 @@
       if (!typingSince) { cancelTypingWork(); return; }
       cancelTypingWork();
       if (!pagesRoot) return;
-      // Reflow before the snapshot so undo restores a settled layout. This is
-      // the debounced path, so it never runs per keystroke.
-      repaginate(getPageEl());
+      // Pagination is expensive on image-heavy docs; defer until the user pauses
+      // longer than the typing debounce. Undo snapshots skip the JSON round-trip
+      // in history.js but still need serializeDoc().
+      schedulePaginate(getPageEl(), TYPING_PAGINATE_IDLE_MS);
       updateStatus();
       if (!skipInputRecord && !history.isApplying()) {
         history.record(serializeDoc(), { coalesce: true });
@@ -688,6 +694,26 @@
     let paginateTimer = 0;
     let composing = false;
 
+    function currentZoom() {
+      if (!pagesRoot) return zoom || 1;
+      const z = parseFloat(pagesRoot.style.zoom);
+      return z > 0 ? z : (zoom || 1);
+    }
+
+    function layoutRectHeight(rect) {
+      const z = currentZoom();
+      return rect.height / z;
+    }
+
+    function layoutHeight(el) {
+      if (!el) return 0;
+      return layoutRectHeight(el.getBoundingClientRect());
+    }
+
+    function rangeLayoutHeight(range) {
+      return layoutRectHeight(range.getBoundingClientRect());
+    }
+
     function outerHeight(el) {
       if (!el) return 0;
       const cs = getComputedStyle(el);
@@ -716,6 +742,7 @@
 
     function restoreCaret(saved) {
       if (!saved || !saved.node || !saved.node.isConnected) return;
+      if (isFindFieldFocused()) return;
       // Moving a node between pages keeps the node itself, so the captured
       // container is still the right anchor - but focus has to follow it into
       // whichever page body now owns it.
@@ -812,7 +839,7 @@
       if (total < 80) return null;
 
       const range = document.createRange();
-      const overhead = Math.max(0, outerHeight(el) - el.getBoundingClientRect().height);
+      const overhead = Math.max(0, outerHeight(el) - layoutHeight(el));
       room -= overhead;
       if (room <= 24) return null;
       const heightTo = (chars) => {
@@ -821,7 +848,7 @@
           if (left <= t.nodeValue.length) {
             range.setStart(el, 0);
             range.setEnd(t, left);
-            return range.getBoundingClientRect().height;
+            return rangeLayoutHeight(range);
           }
           left -= t.nodeValue.length;
         }
@@ -902,6 +929,7 @@
     function fitOversizedMedia(body, limit) {
       let changed = false;
       body.querySelectorAll('img').forEach((img) => {
+        if (img.style.maxHeight && img.style.maxHeight !== 'none') return;
         const h = outerHeight(img);
         if (h > limit && limit > 0) {
           img.style.maxHeight = Math.floor(limit) + 'px';
@@ -1059,13 +1087,14 @@
       return changed;
     }
 
-    function schedulePaginate(startPage) {
+    function schedulePaginate(startPage, idleMs) {
       if (paginateTimer) clearTimeout(paginateTimer);
       const from = startPage || getPageEl();
+      const delay = idleMs != null ? idleMs : 90;
       paginateTimer = setTimeout(() => {
         paginateTimer = 0;
         if (repaginate(from)) updateStatus();
-      }, 90);
+      }, delay);
     }
 
     function makePageEl(html) {
@@ -1115,6 +1144,299 @@
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 40);
       return el;
+    }
+
+    /* ---------- cross-page selection / clipboard ---------- */
+    /* Each .doc-page-body is its own contenteditable, with non-editable
+       headers/footers between them. Native selection cannot cross that
+       boundary, so Copy only ever serialized the focused page. These helpers
+       keep a range that spans page bodies and write all of it (text + images)
+       to the clipboard. */
+
+    function pageBodies() {
+      return pageList().map((p) => p.querySelector('.doc-page-body')).filter(Boolean);
+    }
+
+    function pageBodyOf(node) {
+      if (!node || !pagesRoot) return null;
+      if (node.nodeType === 1 && node.classList && node.classList.contains('doc-page-body')
+          && pagesRoot.contains(node)) {
+        return node;
+      }
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      if (!el || !el.closest) return null;
+      const body = el.closest('.doc-page-body');
+      return body && pagesRoot.contains(body) ? body : null;
+    }
+
+    function clampNodeOffset(node, offset) {
+      const max = node.nodeType === 3 ? (node.nodeValue || '').length : node.childNodes.length;
+      return Math.max(0, Math.min(offset, max));
+    }
+
+    function pointIsBefore(a, b) {
+      if (a.node === b.node) return a.offset <= b.offset;
+      const pos = a.node.compareDocumentPosition(b.node);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return true;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return false;
+      try {
+        const probe = document.createRange();
+        probe.setStart(a.node, clampNodeOffset(a.node, a.offset));
+        probe.collapse(true);
+        return probe.comparePoint(b.node, b.offset) >= 0;
+      } catch {
+        return true;
+      }
+    }
+
+    function orderedPoints(a, b) {
+      return pointIsBefore(a, b) ? { start: a, end: b } : { start: b, end: a };
+    }
+
+    function caretInPageBody(x, y) {
+      if (!pagesRoot) return null;
+      const el = document.elementFromPoint(x, y);
+      if (!el || !el.closest) return null;
+      const page = el.closest('.doc-page');
+      if (!page || !pagesRoot.contains(page)) return null;
+      const body = page.querySelector('.doc-page-body');
+      if (!body) return null;
+
+      let range = null;
+      try {
+        if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+        else if (document.caretPositionFromPoint) {
+          const pos = document.caretPositionFromPoint(x, y);
+          if (pos) {
+            range = document.createRange();
+            range.setStart(pos.offsetNode, pos.offset);
+            range.collapse(true);
+          }
+        }
+      } catch { range = null; }
+      if (range && body.contains(range.startContainer)) {
+        return { node: range.startContainer, offset: range.startOffset };
+      }
+
+      const header = page.querySelector('.doc-page-header');
+      const footer = page.querySelector('.doc-page-footer');
+      if (header && (header === el || header.contains(el))) return { node: body, offset: 0 };
+      if (footer && (footer === el || footer.contains(el))) return { node: body, offset: body.childNodes.length };
+      const br = body.getBoundingClientRect();
+      if (y < br.top + br.height / 2) return { node: body, offset: 0 };
+      return { node: body, offset: body.childNodes.length };
+    }
+
+    function applyCrossSelection(anchor, focus) {
+      if (!anchor || !focus || !anchor.node || !focus.node) return false;
+      if (!anchor.node.isConnected || !focus.node.isConnected) return false;
+      const ordered = orderedPoints(anchor, focus);
+      const startBody = pageBodyOf(ordered.start.node);
+      const endBody = pageBodyOf(ordered.end.node);
+      if (!startBody || !endBody) return false;
+      if (startBody !== endBody) crossPageRange = ordered;
+      else crossPageRange = null;
+      try {
+        const range = document.createRange();
+        range.setStart(ordered.start.node, clampNodeOffset(ordered.start.node, ordered.start.offset));
+        range.setEnd(ordered.end.node, clampNodeOffset(ordered.end.node, ordered.end.offset));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return true;
+      } catch {
+        return !!crossPageRange;
+      }
+    }
+
+    function getCopySpan() {
+      const fromStored = () => {
+        if (!crossPageRange || !crossPageRange.start || !crossPageRange.end) return null;
+        if (!crossPageRange.start.node || !crossPageRange.start.node.isConnected) return null;
+        if (!crossPageRange.end.node || !crossPageRange.end.node.isConnected) return null;
+        const startBody = pageBodyOf(crossPageRange.start.node);
+        const endBody = pageBodyOf(crossPageRange.end.node);
+        if (!startBody || !endBody) return null;
+        const bodies = pageBodies();
+        const startIdx = bodies.indexOf(startBody);
+        const endIdx = bodies.indexOf(endBody);
+        if (startIdx < 0 || endIdx < 0) return null;
+        const lo = Math.min(startIdx, endIdx);
+        const hi = Math.max(startIdx, endIdx);
+        const ordered = orderedPoints(crossPageRange.start, crossPageRange.end);
+        return { start: ordered.start, end: ordered.end, startIdx: lo, endIdx: hi, bodies };
+      };
+
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && !sel.isCollapsed) {
+        const r = sel.getRangeAt(0);
+        const startBody = pageBodyOf(r.startContainer);
+        const endBody = pageBodyOf(r.endContainer);
+        if (startBody && endBody) {
+          const bodies = pageBodies();
+          const startIdx = bodies.indexOf(startBody);
+          const endIdx = bodies.indexOf(endBody);
+          if (startIdx >= 0 && endIdx >= 0 && startIdx !== endIdx) {
+            const lo = Math.min(startIdx, endIdx);
+            const hi = Math.max(startIdx, endIdx);
+            return {
+              start: { node: r.startContainer, offset: r.startOffset },
+              end: { node: r.endContainer, offset: r.endOffset },
+              startIdx: lo,
+              endIdx: hi,
+              bodies
+            };
+          }
+        }
+      }
+      return fromStored();
+    }
+
+    function slicePageRange(body, i, span) {
+      const r = document.createRange();
+      if (i === span.startIdx) {
+        r.setStart(span.start.node, clampNodeOffset(span.start.node, span.start.offset));
+      } else {
+        r.setStart(body, 0);
+      }
+      if (i === span.endIdx) {
+        r.setEnd(span.end.node, clampNodeOffset(span.end.node, span.end.offset));
+      } else {
+        r.setEnd(body, body.childNodes.length);
+      }
+      return r;
+    }
+
+    function buildCopyPayload() {
+      const span = getCopySpan();
+      if (!span || span.startIdx === span.endIdx) return null;
+      const wrap = document.createElement('div');
+      for (let i = span.startIdx; i <= span.endIdx; i++) {
+        const body = span.bodies[i];
+        if (!body) continue;
+        try {
+          wrap.appendChild(slicePageRange(body, i, span).cloneContents());
+        } catch {
+          Array.from(body.cloneNode(true).childNodes).forEach((n) => wrap.appendChild(n));
+        }
+      }
+      wrap.querySelectorAll('mark.margo-find-hit').forEach((m) => {
+        m.replaceWith(document.createTextNode(m.textContent));
+      });
+      normalizeFonts(wrap);
+      return { html: wrap.innerHTML, text: plainText(wrap) };
+    }
+
+    function writeClipboardFromEvent(e, payload) {
+      e.preventDefault();
+      e.clipboardData.setData('text/html', payload.html);
+      e.clipboardData.setData('text/plain', payload.text);
+    }
+
+    function deleteCopySpan(span) {
+      skipInputRecord = true;
+      try {
+        for (let i = span.endIdx; i >= span.startIdx; i--) {
+          const body = span.bodies[i];
+          if (!body) continue;
+          try { slicePageRange(body, i, span).deleteContents(); } catch {}
+          if (!body.childNodes.length) body.innerHTML = EMPTY_PAGE;
+        }
+      } finally {
+        skipInputRecord = false;
+      }
+      crossPageRange = null;
+      ctx.markDirty();
+      recordNow();
+      const startPage = span.bodies[span.startIdx] && span.bodies[span.startIdx].closest('.doc-page');
+      schedulePaginate(startPage || getPageEl());
+      updateStatus();
+    }
+
+    function selectAllDocument() {
+      const bodies = pageBodies();
+      if (!bodies.length) return;
+      const first = bodies[0];
+      const last = bodies[bodies.length - 1];
+      const start = { node: first, offset: 0 };
+      const end = { node: last, offset: last.childNodes.length };
+      try { first.focus({ preventScroll: true }); } catch { first.focus(); }
+      applyCrossSelection(start, end);
+    }
+
+    function onSelectPointerDown(e) {
+      if (e.button !== 0 || !pagesRoot) return;
+      if (e.target.closest && e.target.closest('button, input, textarea, .doc-find-bar')) return;
+      const page = e.target.closest && e.target.closest('.doc-page');
+      if (!page || !pagesRoot.contains(page)) return;
+      const caret = caretInPageBody(e.clientX, e.clientY);
+      const sel = window.getSelection();
+      if (e.shiftKey && sel && sel.anchorNode && pageBodyOf(sel.anchorNode)) {
+        e.preventDefault();
+        selectAnchor = { node: sel.anchorNode, offset: sel.anchorOffset };
+        if (caret) applyCrossSelection(selectAnchor, caret);
+      } else if (caret) {
+        selectAnchor = caret;
+        crossPageRange = null;
+      } else {
+        selectAnchor = null;
+        crossPageRange = null;
+      }
+      selectDragging = true;
+    }
+
+    function onSelectPointerMove(e) {
+      if (!selectDragging || !selectAnchor || !(e.buttons & 1)) return;
+      if (!selectAnchor.node || !selectAnchor.node.isConnected) return;
+      const caret = caretInPageBody(e.clientX, e.clientY);
+      if (!caret) return;
+      const aBody = pageBodyOf(selectAnchor.node);
+      const bBody = pageBodyOf(caret.node);
+      if (!aBody || !bBody || aBody === bBody) return;
+      e.preventDefault();
+      applyCrossSelection(selectAnchor, caret);
+    }
+
+    function onSelectPointerUp() {
+      selectDragging = false;
+      selectAnchor = null;
+    }
+
+    function onPageCopy(e) {
+      const payload = buildCopyPayload();
+      if (!payload) return;
+      writeClipboardFromEvent(e, payload);
+    }
+
+    function onPageCut(e) {
+      const payload = buildCopyPayload();
+      if (!payload) return;
+      const span = getCopySpan();
+      writeClipboardFromEvent(e, payload);
+      if (span) deleteCopySpan(span);
+    }
+
+    function onPageKeydown(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'a') return;
+      if (typeof isFindFieldFocused === 'function' && isFindFieldFocused()) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      e.preventDefault();
+      selectAllDocument();
+    }
+
+    function execClipboardCommand(name) {
+      const payload = buildCopyPayload();
+      if (!payload) {
+        const page = getPage();
+        if (page) page.focus();
+        document.execCommand(name);
+        return;
+      }
+      const handler = name === 'cut' ? onPageCut : onPageCopy;
+      document.addEventListener(name, handler, true);
+      try { document.execCommand(name); }
+      finally { document.removeEventListener(name, handler, true); }
     }
 
     /* ---------- tables ---------- */
@@ -1756,6 +2078,18 @@
       else findCountEl.textContent = `${findIndex + 1} / ${findHits.length}`;
     }
 
+    function isFindFieldFocused() {
+      const el = document.activeElement;
+      return el === findInput || el === replaceInput;
+    }
+
+    function withFindFocusPreserved(fn) {
+      const el = document.activeElement;
+      const keep = el === findInput || el === replaceInput;
+      fn();
+      if (keep && el && el.isConnected) el.focus();
+    }
+
     function highlightFindCurrent() {
       findHits.forEach((el, i) => el.classList.toggle('margo-find-current', i === findIndex));
       const cur = findHits[findIndex];
@@ -1768,55 +2102,64 @@
     }
 
     function runFind(query) {
-      unwrapFindMarks();
-      const q = (query || '').trim();
-      if (!q || !pagesRoot) {
-        updateFindCount();
-        return;
-      }
-      const lower = q.toLowerCase();
-      const walker = document.createTreeWalker(pagesRoot, NodeFilter.SHOW_TEXT, {
-        acceptNode(node) {
-          if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-          if (node.parentElement && node.parentElement.closest('mark.margo-find-hit')) return NodeFilter.FILTER_REJECT;
-          if (node.parentElement && node.parentElement.closest('.doc-page-header, .doc-page-footer')) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
+      withFindFocusPreserved(() => {
+        findHighlighting = true;
+        try {
+          unwrapFindMarks();
+          const q = (query || '').trim();
+          if (!q || !pagesRoot) {
+            updateFindCount();
+            return;
+          }
+          const lower = q.toLowerCase();
+          const walker = document.createTreeWalker(pagesRoot, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+              if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+              if (node.parentElement && node.parentElement.closest('mark.margo-find-hit')) return NodeFilter.FILTER_REJECT;
+              if (node.parentElement && node.parentElement.closest('.doc-page-header, .doc-page-footer')) return NodeFilter.FILTER_REJECT;
+              return NodeFilter.FILTER_ACCEPT;
+            }
+          });
+          const textNodes = [];
+          let n;
+          while ((n = walker.nextNode())) textNodes.push(n);
+
+          textNodes.forEach((textNode) => {
+            const text = textNode.nodeValue;
+            const lowerText = text.toLowerCase();
+            let start = 0;
+            const parts = [];
+            let idx;
+            while ((idx = lowerText.indexOf(lower, start)) !== -1) {
+              if (idx > start) parts.push(document.createTextNode(text.slice(start, idx)));
+              const mark = document.createElement('mark');
+              mark.className = 'margo-find-hit';
+              mark.textContent = text.slice(idx, idx + q.length);
+              parts.push(mark);
+              findHits.push(mark);
+              start = idx + q.length;
+            }
+            if (start === 0) return;
+            if (start < text.length) parts.push(document.createTextNode(text.slice(start)));
+            const parent = textNode.parentNode;
+            parts.forEach((p) => parent.insertBefore(p, textNode));
+            parent.removeChild(textNode);
+          });
+
+          findIndex = findHits.length ? 0 : -1;
+          highlightFindCurrent();
+        } finally {
+          findHighlighting = false;
         }
       });
-      const textNodes = [];
-      let n;
-      while ((n = walker.nextNode())) textNodes.push(n);
-
-      textNodes.forEach((textNode) => {
-        const text = textNode.nodeValue;
-        const lowerText = text.toLowerCase();
-        let start = 0;
-        const parts = [];
-        let idx;
-        while ((idx = lowerText.indexOf(lower, start)) !== -1) {
-          if (idx > start) parts.push(document.createTextNode(text.slice(start, idx)));
-          const mark = document.createElement('mark');
-          mark.className = 'margo-find-hit';
-          mark.textContent = text.slice(idx, idx + q.length);
-          parts.push(mark);
-          findHits.push(mark);
-          start = idx + q.length;
-        }
-        if (start === 0) return;
-        if (start < text.length) parts.push(document.createTextNode(text.slice(start)));
-        const parent = textNode.parentNode;
-        parts.forEach((p) => parent.insertBefore(p, textNode));
-        parent.removeChild(textNode);
-      });
-
-      findIndex = findHits.length ? 0 : -1;
-      highlightFindCurrent();
     }
 
     function findNext(dir) {
       if (!findHits.length) return;
-      findIndex = (findIndex + dir + findHits.length) % findHits.length;
-      highlightFindCurrent();
+      withFindFocusPreserved(() => {
+        findIndex = (findIndex + dir + findHits.length) % findHits.length;
+        highlightFindCurrent();
+      });
     }
 
     function replaceCurrent() {
@@ -2714,6 +3057,8 @@
         try { document.execCommand('styleWithCSS', false, false); } catch {}
 
         pagesRoot.addEventListener('input', () => {
+          if (findHighlighting) return;
+          crossPageRange = null;
           ctx.markDirty();
           scheduleTypingWork();
         });
@@ -2728,6 +3073,12 @@
         });
         pagesRoot.addEventListener('pointermove', onTableResizeHover);
         pagesRoot.addEventListener('pointerdown', onTableResizeDown, true);
+        pagesRoot.addEventListener('pointerdown', onSelectPointerDown);
+        pagesRoot.addEventListener('copy', onPageCopy);
+        pagesRoot.addEventListener('cut', onPageCut);
+        pagesRoot.addEventListener('keydown', onPageKeydown);
+        document.addEventListener('pointermove', onSelectPointerMove, true);
+        document.addEventListener('pointerup', onSelectPointerUp, true);
         document.addEventListener('selectionchange', onSelChange);
         document.addEventListener('keydown', onFindKeydown, true);
 
@@ -2794,16 +3145,39 @@
           if (statesRaf) { cancelAnimationFrame(statesRaf); statesRaf = 0; }
           document.removeEventListener('selectionchange', onSelChange);
           document.removeEventListener('keydown', onFindKeydown, true);
+          document.removeEventListener('pointermove', onSelectPointerMove, true);
+          document.removeEventListener('pointerup', onSelectPointerUp, true);
+          selectDragging = false;
+          selectAnchor = null;
+          crossPageRange = null;
           if (pagesRoot) {
             pagesRoot.removeEventListener('pointermove', onTableResizeHover);
             pagesRoot.removeEventListener('pointerdown', onTableResizeDown, true);
+            pagesRoot.removeEventListener('pointerdown', onSelectPointerDown);
+            pagesRoot.removeEventListener('copy', onPageCopy);
+            pagesRoot.removeEventListener('cut', onPageCut);
+            pagesRoot.removeEventListener('keydown', onPageKeydown);
             pagesRoot.style.cursor = '';
           }
           if (scrollEl) scrollEl.removeEventListener('wheel', onCtrlWheel);
           if (document.body.classList.contains('margo-focus-mode')) toggleFocusMode();
           unwrapFindMarks();
         };
-        this._test = { addPage: () => addPage(), openFind, addNote, openStats: openStatsModal };
+        this._test = {
+          addPage: () => addPage(),
+          openFind,
+          addNote,
+          openStats: openStatsModal,
+          selectAll: () => selectAllDocument(),
+          copyPayload: () => buildCopyPayload(),
+          currentZoom: () => currentZoom(),
+          usableHeight: (pageEl) => usableHeight(pageEl || getPageEl()),
+          layoutHeight: (el) => layoutHeight(el),
+          flushTypingWork: () => flushTypingWork(),
+          pageCount: () => pageList().length,
+          paginateScheduled: () => !!paginateTimer,
+          paginating: () => paginating
+        };
       },
       getData() {
         return serializeDoc();
@@ -2815,6 +3189,9 @@
         redo,
         canUndo: () => history.canUndo(),
         canRedo: () => history.canRedo(),
+        copy: () => execClipboardCommand('copy'),
+        cut: () => execClipboardCommand('cut'),
+        selectAll: () => selectAllDocument(),
         paste: (t) => {
           const page = getPage();
           if (!page) return;

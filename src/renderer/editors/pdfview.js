@@ -599,30 +599,40 @@
     }
 
     function paintFindHits() {
-      clearFindMarks();
-      if (findIndex < 0 || !findHits[findIndex]) {
+      const keep = document.activeElement;
+      const keepFind = keep === findInput;
+      try {
+        clearFindMarks();
+        if (!findHits.length) {
+          updateFindCount();
+          return;
+        }
+        findHits.forEach((hit, i) => {
+          const page = textIndex[hit.pageIndex];
+          const pv = pageViews[hit.pageIndex];
+          if (!page || !pv) return;
+          const isCurrent = i === findIndex;
+          page.items.forEach((it) => {
+            if (it.end <= hit.start || it.start >= hit.end) return;
+            try {
+              const r = itemCssRect(pv, it.item);
+              const mark = document.createElement('div');
+              mark.className = 'pdf-find-hit' + (isCurrent ? ' current' : '');
+              mark.style.left = r.left + 'px';
+              mark.style.top = r.top + 'px';
+              mark.style.width = r.width + 'px';
+              mark.style.height = r.height + 'px';
+              pv.overlay.appendChild(mark);
+            } catch { /* overlay math can fail on odd text items */ }
+          });
+        });
+        const cur = findHits[findIndex];
+        const curPv = cur && pageViews[cur.pageIndex];
+        if (curPv) curPv.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         updateFindCount();
-        return;
+      } finally {
+        if (keepFind && keep && keep.isConnected) keep.focus();
       }
-      const hit = findHits[findIndex];
-      const page = textIndex[hit.pageIndex];
-      const pv = pageViews[hit.pageIndex];
-      if (!page || !pv) return;
-      page.items.forEach((it) => {
-        if (it.end <= hit.start || it.start >= hit.end) return;
-        try {
-          const r = itemCssRect(pv, it.item);
-          const mark = document.createElement('div');
-          mark.className = 'pdf-find-hit current';
-          mark.style.left = r.left + 'px';
-          mark.style.top = r.top + 'px';
-          mark.style.width = r.width + 'px';
-          mark.style.height = r.height + 'px';
-          pv.overlay.appendChild(mark);
-        } catch { /* overlay math can fail on odd text items */ }
-      });
-      pv.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      updateFindCount();
     }
 
     function runFind(query) {
