@@ -36,6 +36,8 @@
     let loadedFromPath = false;
     let pageViews = [];        // { el, canvas, overlay, vp1, rendered, rendering }
     let cssScale = 1, fitScale = 1, zoom = 1;
+    const ZOOM_MIN = 0.4;
+    const ZOOM_MAX = 3;
     let placements = [];       // { pageIndex, xr, yr, wr, hr, dataUrl }
     let observer = null, destroyed = false;
     let zoomLabel = null, currentPage = 1;
@@ -114,6 +116,7 @@
         pv.rendered = false;
       }
       if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
+      if (ctx.status) ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
       renderVisible();
       if (findOpen) paintFindHits();
     }
@@ -121,7 +124,7 @@
     function zoomBy(factor, clientX, clientY) {
       if (!scroll) return;
       const prev = zoom;
-      const next = Math.min(3, Math.max(0.4, +(zoom * factor).toFixed(4)));
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom * factor).toFixed(4)));
       if (next === prev) return;
       const rect = scroll.getBoundingClientRect();
       const mx = clientX != null ? clientX - rect.left : scroll.clientWidth / 2;
@@ -131,6 +134,29 @@
       applyScale();
       scroll.scrollLeft = (scroll.scrollLeft + mx) * ratio - mx;
       scroll.scrollTop = (scroll.scrollTop + my) * ratio - my;
+    }
+
+    function setZoomLevel(z, clientX, clientY) {
+      if (!scroll) return;
+      const prev = zoom;
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z));
+      if (next === prev) return;
+      const rect = scroll.getBoundingClientRect();
+      const mx = clientX != null ? clientX - rect.left : scroll.clientWidth / 2;
+      const my = clientY != null ? clientY - rect.top : scroll.clientHeight / 2;
+      const ratio = next / prev;
+      zoom = next;
+      applyScale();
+      scroll.scrollLeft = (scroll.scrollLeft + mx) * ratio - mx;
+      scroll.scrollTop = (scroll.scrollTop + my) * ratio - my;
+    }
+
+    function setupStatusChrome() {
+      if (!ctx.status) return;
+      ctx.status.setKind('PDF');
+      ctx.status.showZoom(true);
+      ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
+      ctx.status.onZoom((z) => setZoomLevel(z));
     }
 
     function onCtrlWheel(e) {
@@ -184,7 +210,7 @@
       const pending = placements.length
         ? ` · ${placements.length} signature${placements.length > 1 ? 's' : ''} pending`
         : '';
-      ctx.setStatus(`Page ${cur} of ${pdf.numPages}`, `PDF${pending}`);
+      ctx.setStatus(`Page ${cur} of ${pdf.numPages}`, pending ? `PDF${pending}` : 'PDF');
     }
 
     /* ---------------- signature pad ---------------- */
@@ -794,6 +820,8 @@
         history.seed(capturePlacements());
         findBar = null;
         ensureFindBar();
+        setupStatusChrome();
+        updateStatus();
       },
       getDraft() {
         const out = {
@@ -840,6 +868,7 @@
         zoomIn: () => zoomBy(1.2),
         zoomOut: () => zoomBy(1 / 1.2),
         zoomReset: () => { zoom = 1; applyScale(); },
+        setZoom: (z) => setZoomLevel(z),
         showImages: () => showImagesPanel(),
         find: () => openFind()
       },

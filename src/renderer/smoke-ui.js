@@ -17,6 +17,11 @@
       T.showLanding();
       await wait(150);
       t('landing visible', !document.getElementById('view-landing').classList.contains('hidden'));
+      t('home hub renders', !!document.querySelector('.home-title'));
+      t('home create includes PDF', !!document.querySelector('.home-new[data-new="pdf"]'));
+      t('home tiles region exists', !!document.getElementById('home-tiles'));
+      const shell = document.getElementById('shell');
+      t('sidebar hidden on home', shell.classList.contains('view-home'));
 
       // 1b. menu bar
       const tops = document.querySelectorAll('.menu-top');
@@ -55,18 +60,6 @@
       await wait(60);
       t('settings closes on Escape', document.getElementById('modal-backdrop').classList.contains('hidden'));
 
-      // 1c. sliding sidebar (unpinned by default)
-      const sidebar = document.getElementById('sidebar');
-      const shell = document.getElementById('shell');
-      t('sidebar unpinned by default', !shell.classList.contains('pinned'));
-      T.closeSidebar(true);
-      t('sidebar hides', !sidebar.classList.contains('open'));
-      document.getElementById('side-hotzone').dispatchEvent(new MouseEvent('mouseenter'));
-      await wait(60);
-      t('sidebar slides in on left-edge hover', sidebar.classList.contains('open'));
-      t('sidebar New includes PDF', !!document.querySelector('.side-new[data-new="pdf"]'));
-      await shot('sidebar-hover.png');
-
       // 2. theme toggle round trip + captures
       T.applyTheme('light', false);
       t('light scheme set', document.documentElement.dataset.scheme === 'light');
@@ -84,6 +77,17 @@
       // 3. markdown editor
       await T.openFromPath(cfg.welcomePath);
       t('md editor mounts', T.state.view === 'editor' && T.state.doc.kind === 'md');
+      t('sidebar visible in editor', !shell.classList.contains('view-home'));
+      const sidebar = document.getElementById('sidebar');
+      t('sidebar unpinned by default', !shell.classList.contains('pinned'));
+      T.closeSidebar(true);
+      t('sidebar hides', !sidebar.classList.contains('open'));
+      document.getElementById('side-hotzone').dispatchEvent(new MouseEvent('mouseenter'));
+      await wait(60);
+      t('sidebar slides in on left-edge hover', sidebar.classList.contains('open'));
+      t('sidebar New includes PDF', !!document.querySelector('.side-new[data-new="pdf"]'));
+      t('sidebar settings button exists', !!document.getElementById('btn-sidebar-settings'));
+      await shot('sidebar-hover.png');
       await wait(300);
       const preview = document.querySelector('.tab-pane:not([hidden]) .md-preview') || document.querySelector('.md-preview');
       t('md preview renders heading', !!(preview && preview.querySelector('h1')));
@@ -227,6 +231,22 @@
         t('doc copy includes images from both pages',
           !!(payload && (payload.html.match(/<img/gi) || []).length >= 2),
           payload ? String((payload.html.match(/<img/gi) || []).length) : 'no payload');
+        if (bodies.length >= 2 && edCopy && edCopy._test) {
+          const dragApi = edCopy._test;
+          if (dragApi.dragSelect) {
+            dragApi.dragSelect(bodies[0], bodies[1]);
+            const span = dragApi.crossPageSpan && dragApi.crossPageSpan();
+            t('doc drag select spans two pages',
+              !!(span && span.startIdx !== span.endIdx),
+              span ? `${span.startIdx}-${span.endIdx}` : 'no span');
+            t('doc drag select uses css highlight',
+              dragApi.crossPageHighlightActive && dragApi.crossPageHighlightActive(),
+              String(dragApi.crossPageHighlightActive && dragApi.crossPageHighlightActive()));
+            t('doc drag select no overlay boxes',
+              document.querySelectorAll('.doc-cross-sel-box').length === 0,
+              String(document.querySelectorAll('.doc-cross-sel-box').length));
+          }
+        }
       }
       if (edDoc && edDoc.commands && edDoc.commands.zoomIn) {
         const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
@@ -285,6 +305,45 @@
         }
         edDoc.commands.zoomReset();
         t('doc zoom reset returns to 100%', testApi && testApi.currentZoom() === 1);
+
+        const statusZoom = document.querySelector('.tab-pane:not([hidden]) .status-zoom')
+          || document.querySelector('.status-zoom');
+        const statusPct = document.querySelector('.tab-pane:not([hidden]) .status-zoom-pct')
+          || document.querySelector('.status-zoom-pct');
+        t('doc status zoom cluster present', !!(statusZoom && !statusZoom.classList.contains('hidden')));
+        edDoc.commands.zoomIn();
+        await wait(20);
+        t('doc status percent updates on zoom',
+          statusPct && parseInt(statusPct.textContent, 10) > 100,
+          statusPct ? statusPct.textContent : 'missing');
+        if (edDoc.commands.setZoom) {
+          edDoc.commands.setZoom(1);
+          await wait(10);
+          t('doc setZoom returns status to 100%',
+            statusPct && statusPct.textContent === '100%',
+            statusPct ? statusPct.textContent : 'missing');
+        }
+        if (edDoc.commands.setViewMode) {
+          edDoc.commands.setViewMode('read');
+          await wait(20);
+          t('doc read view disables editing',
+            testApi && testApi.pageBodiesEditable && testApi.pageBodiesEditable() === false);
+          const ribbon = document.querySelector('.tab-pane:not([hidden]) .doc-ribbon')
+            || document.querySelector('.doc-ribbon');
+          t('doc read view hides ribbon',
+            ribbon && getComputedStyle(ribbon).display === 'none');
+          edDoc.commands.setViewMode('split');
+          await wait(30);
+          t('doc split view shows preview pane',
+            testApi && testApi.splitPreviewVisible && testApi.splitPreviewVisible());
+          t('doc split view keeps editor editable',
+            testApi && testApi.pageBodiesEditable && testApi.pageBodiesEditable() === true);
+          edDoc.commands.setViewMode('print');
+          await wait(20);
+          t('doc print layout restores editing',
+            testApi && testApi.pageBodiesEditable && testApi.pageBodiesEditable() === true);
+        }
+        edDoc.commands.zoomReset();
       }
       {
         const edFind = T.getEditor();
@@ -482,14 +541,15 @@
       t('md thumbnail generates', !!mdThumbUrl && mdThumbUrl.length > 500);
       T.state.dirty = false;
 
-      // 8. back home + sidebar recents populated with thumbs
+      // 8. back home + home tiles populated with thumbs
       T.showLanding();
       await wait(400);
       t('landing returns', T.state.view === 'home');
-      const cards = document.querySelectorAll('.recent-card');
-      t('recents populated', cards.length >= 1, `${cards.length} cards`);
-      t('recents show thumbnails', document.querySelectorAll('.recent-thumb img').length >= 2,
-        `${document.querySelectorAll('.recent-thumb img').length} thumbs`);
+      t('sidebar hidden after home', shell.classList.contains('view-home'));
+      const tiles = document.querySelectorAll('.home-tile');
+      t('recents populated', tiles.length >= 1, `${tiles.length} tiles`);
+      t('recents show thumbnails', document.querySelectorAll('.home-tile-cover img').length >= 2,
+        `${document.querySelectorAll('.home-tile-cover img').length} thumbs`);
       await shot('landing-recents.png');
     } catch (err) {
       t('suite crashed', false, err.stack || err.message);

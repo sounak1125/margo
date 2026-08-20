@@ -34,6 +34,7 @@
     sun: S('<circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/>'),
     moon: S('<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/>'),
     pin: S('<path d="M6.2 2h3.6M8 2v2.6M5 4.6h6l1.2 4.6H3.8zM8 9.2v4.3"/>'),
+    settings: S('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.4M8 13v1.4M1.6 8h1.4M13 8h1.4M3.7 3.7l1 1M11.3 11.3l1 1M12.3 3.7l-1 1M4.7 11.3l-1 1"/>'),
     note: S('<path d="M3.5 2.5h7.5L13.5 5.5V13.5H3.5z"/><path d="M11 2.5V5.5h2.5M5.5 8h5M5.5 10.5h3.5"/>'),
     bell: S('<path d="M8 2.5a3.2 3.2 0 0 1 3.2 3.2v2.1l1.3 2.2H3.5L4.8 7.8V5.7A3.2 3.2 0 0 1 8 2.5z"/><path d="M6.5 13a1.5 1.5 0 0 0 3 0"/>'),
     search: S('<circle cx="7" cy="7" r="4.5"/><path d="m13.5 13.5-3.2-3.2"/>'),
@@ -82,7 +83,9 @@
     percent: S('<path d="M12.5 3.5 3.5 12.5"/><circle cx="5" cy="5" r="1.5"/><circle cx="11" cy="11" r="1.5"/>'),
     comma: S('<path d="M8 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-.2 1.5c.8 0 1.2.6 1 1.4l-.8 2.1H6.5l.8-2c.1-.4-.2-.7-.5-.7z"/>'),
     decimalInc: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 4.5l-1 1M1 4.5h3"/>'),
-    decimalDec: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 5.5l1-1M1 4.5h3"/>')
+    decimalDec: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 5.5l1-1M1 4.5h3"/>'),
+    printLayout: S('<path d="M3.5 2h6L13 5.5V14H3.5z"/><path d="M5.5 8h5.5M5.5 10.5h5.5"/>'),
+    readView: S('<path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>')
   };
 
   /* ---------------- state ---------------- */
@@ -109,6 +112,9 @@
     tabBar: $('tab-bar'), tabPanes: $('tab-panes'),
     recentsList: $('recents-grid'), sideEmpty: $('side-empty'),
     btnClearRecents: $('btn-clear-recents'),
+    homeTiles: $('home-tiles'), homeTilesEmpty: $('home-tiles-empty'),
+    btnClearHomeRecents: $('btn-clear-home-recents'), btnHomeOpen: $('btn-home-open'),
+    btnSidebarSettings: $('btn-sidebar-settings'),
     shell: $('shell'), sidebar: $('sidebar'), hotzone: $('side-hotzone'),
     pinBtn: $('btn-pin-sidebar'), menubar: $('menubar'),
     modalBackdrop: $('modal-backdrop'), modal: document.querySelector('.modal'),
@@ -226,9 +232,193 @@
     }
     if (t) scheduleDraft(t);
   }
-  function setStatus(left, right) {
-    if (els.statusLeft) els.statusLeft.textContent = left || '';
-    if (els.statusRight) els.statusRight.textContent = right || '';
+  function setStatus(left, kind) {
+    const t = findTab(state.activeTabId);
+    if (!t || !t.status) return;
+    t.status.setLeft(left || '');
+    if (kind !== undefined) t.status.setKind(kind || '');
+  }
+
+  function createStatusChrome() {
+    let zoomMin = 0.5;
+    let zoomMax = 2;
+    let zoomVal = 1;
+    let syncing = false;
+    let zoomHandler = null;
+    let viewHandler = null;
+    const viewBtns = new Map();
+    let presetPop = null;
+
+    const statusLeft = document.createElement('span');
+    statusLeft.className = 'status-left';
+
+    const statusRight = document.createElement('div');
+    statusRight.className = 'status-right';
+
+    const kindEl = document.createElement('span');
+    kindEl.className = 'status-kind hidden';
+
+    const viewsEl = document.createElement('div');
+    viewsEl.className = 'status-views hidden';
+
+    const zoomEl = document.createElement('div');
+    zoomEl.className = 'status-zoom hidden';
+
+    const zoomOutBtn = document.createElement('button');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.className = 'status-zoom-btn';
+    zoomOutBtn.title = 'Zoom out';
+    zoomOutBtn.innerHTML = window.MargoIcons.zoomOut;
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'status-zoom-slider';
+    slider.min = '0';
+    slider.max = '100';
+    slider.step = '1';
+    slider.value = '50';
+    slider.setAttribute('aria-label', 'Zoom');
+
+    const zoomInBtn = document.createElement('button');
+    zoomInBtn.type = 'button';
+    zoomInBtn.className = 'status-zoom-btn';
+    zoomInBtn.title = 'Zoom in';
+    zoomInBtn.innerHTML = window.MargoIcons.zoomIn;
+
+    const pctBtn = document.createElement('button');
+    pctBtn.type = 'button';
+    pctBtn.className = 'status-zoom-pct';
+    pctBtn.textContent = '100%';
+    pctBtn.title = 'Zoom level';
+
+    zoomEl.appendChild(zoomOutBtn);
+    zoomEl.appendChild(slider);
+    zoomEl.appendChild(zoomInBtn);
+    zoomEl.appendChild(pctBtn);
+
+    statusRight.appendChild(kindEl);
+    statusRight.appendChild(viewsEl);
+    statusRight.appendChild(zoomEl);
+
+    function zoomToSlider(z) {
+      const span = zoomMax - zoomMin;
+      if (span <= 0) return 50;
+      return Math.round(((z - zoomMin) / span) * 100);
+    }
+    function sliderToZoom(v) {
+      const span = zoomMax - zoomMin;
+      return +(zoomMin + (Number(v) / 100) * span).toFixed(4);
+    }
+    function closePresetPop() {
+      if (presetPop) {
+        presetPop.remove();
+        presetPop = null;
+      }
+    }
+    function emitZoom(z) {
+      if (syncing || !zoomHandler) return;
+      zoomHandler(z);
+    }
+    function paintZoom() {
+      syncing = true;
+      slider.value = String(zoomToSlider(zoomVal));
+      pctBtn.textContent = Math.round(zoomVal * 100) + '%';
+      syncing = false;
+    }
+
+    slider.addEventListener('input', () => {
+      if (syncing) return;
+      zoomVal = sliderToZoom(slider.value);
+      pctBtn.textContent = Math.round(zoomVal * 100) + '%';
+      emitZoom(zoomVal);
+    });
+    zoomOutBtn.addEventListener('click', () => {
+      zoomVal = Math.max(zoomMin, +(zoomVal - 0.1).toFixed(4));
+      paintZoom();
+      emitZoom(zoomVal);
+    });
+    zoomInBtn.addEventListener('click', () => {
+      zoomVal = Math.min(zoomMax, +(zoomVal + 0.1).toFixed(4));
+      paintZoom();
+      emitZoom(zoomVal);
+    });
+    pctBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePresetPop();
+      const pop = document.createElement('div');
+      pop.className = 'status-zoom-presets';
+      [50, 75, 100, 125, 150, 200].forEach((pct) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = pct + '%';
+        b.addEventListener('click', () => {
+          zoomVal = Math.min(zoomMax, Math.max(zoomMin, pct / 100));
+          paintZoom();
+          closePresetPop();
+          emitZoom(zoomVal);
+        });
+        pop.appendChild(b);
+      });
+      const rect = pctBtn.getBoundingClientRect();
+      pop.style.position = 'fixed';
+      pop.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+      pop.style.bottom = Math.max(8, window.innerHeight - rect.top + 4) + 'px';
+      document.body.appendChild(pop);
+      presetPop = pop;
+      const onDoc = (ev) => {
+        if (pop.contains(ev.target) || ev.target === pctBtn) return;
+        closePresetPop();
+        document.removeEventListener('mousedown', onDoc, true);
+      };
+      setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+    });
+
+    const api = {
+      setLeft(text) { statusLeft.textContent = text || ''; },
+      setKind(label) {
+        kindEl.textContent = label || '';
+        kindEl.classList.toggle('hidden', !label);
+      },
+      setViewModes(modes) {
+        viewsEl.innerHTML = '';
+        viewBtns.clear();
+        if (!modes || !modes.length) {
+          viewsEl.classList.add('hidden');
+          return;
+        }
+        modes.forEach((m) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'status-view-btn';
+          b.title = m.title || m.id;
+          b.dataset.view = m.id;
+          if (m.html) b.innerHTML = m.html;
+          else b.textContent = m.label || m.id;
+          b.addEventListener('click', () => {
+            if (viewHandler) viewHandler(m.id);
+          });
+          viewsEl.appendChild(b);
+          viewBtns.set(m.id, b);
+        });
+        viewsEl.classList.remove('hidden');
+      },
+      setViewActive(id) {
+        viewBtns.forEach((b, vid) => b.classList.toggle('active', vid === id));
+      },
+      onView(fn) { viewHandler = fn; },
+      setZoom(z, min, max) {
+        if (min != null) zoomMin = min;
+        if (max != null) zoomMax = max;
+        zoomVal = Math.min(zoomMax, Math.max(zoomMin, z));
+        paintZoom();
+      },
+      getZoom() { return zoomVal; },
+      onZoom(fn) { zoomHandler = fn; },
+      showZoom(show) { zoomEl.classList.toggle('hidden', !show); },
+      destroy() { closePresetPop(); }
+    };
+
+    return { statusLeft, statusRight, api };
   }
 
   /* ---------------- crash recovery drafts ---------------- */
@@ -413,18 +603,15 @@
 
     const statusbar = document.createElement('div');
     statusbar.className = 'statusbar';
-    const statusLeft = document.createElement('span');
-    statusLeft.className = 'status-left';
-    const statusRight = document.createElement('span');
-    statusRight.className = 'status-right';
-    statusbar.appendChild(statusLeft);
-    statusbar.appendChild(statusRight);
+    const chrome = createStatusChrome();
+    statusbar.appendChild(chrome.statusLeft);
+    statusbar.appendChild(chrome.statusRight);
 
     pane.appendChild(toolbar);
     pane.appendChild(host);
     pane.appendChild(statusbar);
     els.tabPanes.appendChild(pane);
-    return { pane, toolbar, host, statusLeft, statusRight };
+    return { pane, toolbar, host, statusLeft: chrome.statusLeft, statusRight: chrome.statusRight, status: chrome.api };
   }
   function paintTabs() {
     const bar = els.tabBar;
@@ -490,6 +677,7 @@
     document.body.classList.remove('margo-focus-mode');
     els.home.classList.add('hidden');
     els.editorView.classList.remove('hidden');
+    applyViewMode();
     state.tabs.forEach((x) => { x.pane.hidden = x.id !== t.id; });
     paintTabs();
     refreshHeader();
@@ -521,11 +709,12 @@
       toolbar: chrome.toolbar,
       host: chrome.host,
       statusLeft: chrome.statusLeft,
-      statusRight: chrome.statusRight
+      statusRight: chrome.statusRight,
+      status: chrome.status
     };
     state.tabs.push(tab);
     await activateTab(id);
-    const ctx = { markDirty, setStatus, toolbar: tab.toolbar, inputModal, confirmModal, openModal, toast };
+    const ctx = { markDirty, setStatus, status: tab.status, toolbar: tab.toolbar, inputModal, confirmModal, openModal, toast };
     const factory = window.MargoEditors[doc.kind];
     if (!factory) {
       state.tabs = state.tabs.filter((x) => x.id !== id);
@@ -567,6 +756,9 @@
     if (t.editor && typeof t.editor.destroy === 'function') {
       try { t.editor.destroy(); } catch {}
     }
+    if (t.status && typeof t.status.destroy === 'function') {
+      try { t.status.destroy(); } catch {}
+    }
     t.pane.remove();
     state.tabs.splice(idx, 1);
     if (wasActive) clearAliases();
@@ -598,6 +790,9 @@
       if (t.editor && typeof t.editor.destroy === 'function') {
         try { t.editor.destroy(); } catch {}
       }
+      if (t.status && typeof t.status.destroy === 'function') {
+        try { t.status.destroy(); } catch {}
+      }
       t.pane.remove();
     }
     state.tabs = [];
@@ -606,9 +801,16 @@
     state.view = 'home';
     els.editorView.classList.add('hidden');
     els.home.classList.remove('hidden');
+    applyViewMode();
     paintTabs();
     refreshHeader();
     loadRecents();
+  }
+
+  function applyViewMode() {
+    const onHome = state.view === 'home';
+    els.shell.classList.toggle('view-home', onHome);
+    if (onHome) closeSidebar(true);
   }
 
   /* ---------------- views ---------------- */
@@ -619,6 +821,7 @@
     clearAliases();
     els.editorView.classList.add('hidden');
     els.home.classList.remove('hidden');
+    applyViewMode();
     paintTabs();
     refreshHeader();
     loadRecents();
@@ -855,16 +1058,52 @@
     const d = Math.floor(h / 24); if (d < 30) return `${d} day${d > 1 ? 's' : ''} ago`;
     return new Date(ts).toLocaleDateString();
   }
+  function kindBadgeClass(ext) {
+    const kind = EXT_ICON[ext];
+    return kind ? `kind-${kind}` : '';
+  }
+  function fillRecentThumb(thumb, r) {
+    if (r.thumb) {
+      const img = document.createElement('img');
+      img.src = r.thumb;
+      img.alt = '';
+      thumb.appendChild(img);
+      return;
+    }
+    const kind = EXT_ICON[r.ext];
+    if (kind) {
+      const img = document.createElement('img');
+      img.src = `../../assets/file-icons/${kind}.png`;
+      img.alt = EXT_STYLE[r.ext] || '';
+      thumb.classList.add('recent-thumb-type');
+      thumb.appendChild(img);
+      return;
+    }
+    const g = document.createElement('span');
+    g.className = 'thumb-glyph';
+    g.textContent = EXT_STYLE[r.ext] || '?';
+    thumb.appendChild(g);
+  }
+  function attachRecentRemove(el, r) {
+    const rm = document.createElement('span');
+    rm.className = el.classList.contains('home-tile-cover') ? 'home-tile-remove' : 'recent-remove';
+    rm.innerHTML = window.MargoIcons.close;
+    rm.title = 'Remove from list';
+    rm.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await window.margo.recents.remove(r.path);
+      loadRecents();
+    });
+    el.appendChild(rm);
+  }
   function markActiveRecent() {
     const current = state.doc && state.doc.path ? state.doc.path.toLowerCase() : null;
-    els.recentsList.querySelectorAll('.recent-card').forEach((c) => {
+    document.querySelectorAll('.recent-card, .home-tile').forEach((c) => {
       c.classList.toggle('active', !!current && c.dataset.path === current);
     });
   }
   let lastRecents = [];
-  async function loadRecents() {
-    const list = await window.margo.recents.list();
-    lastRecents = list;
+  function renderSidebarRecents(list) {
     els.btnClearRecents.classList.toggle('hidden', !list.length);
     els.recentsList.innerHTML = '';
     if (!list.length) {
@@ -882,26 +1121,7 @@
 
       const thumb = document.createElement('span');
       thumb.className = 'recent-thumb';
-      if (r.thumb) {
-        const img = document.createElement('img');
-        img.src = r.thumb;
-        img.alt = '';
-        thumb.appendChild(img);
-      } else {
-        const kind = EXT_ICON[r.ext];
-        if (kind) {
-          const img = document.createElement('img');
-          img.src = `../../assets/file-icons/${kind}.png`;
-          img.alt = EXT_STYLE[r.ext] || '';
-          thumb.classList.add('recent-thumb-type');
-          thumb.appendChild(img);
-        } else {
-          const g = document.createElement('span');
-          g.className = 'thumb-glyph';
-          g.textContent = EXT_STYLE[r.ext] || '?';
-          thumb.appendChild(g);
-        }
-      }
+      fillRecentThumb(thumb, r);
 
       const info = document.createElement('span');
       info.className = 'recent-info';
@@ -910,18 +1130,68 @@
       meta.textContent = `${EXT_STYLE[r.ext] || '?'} · ${timeAgo(r.ts)}`;
       info.appendChild(nm); info.appendChild(meta);
 
-      const rm = document.createElement('span');
-      rm.className = 'recent-remove'; rm.innerHTML = window.MargoIcons.close; rm.title = 'Remove from list';
-      rm.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await window.margo.recents.remove(r.path);
-        loadRecents();
-      });
-
-      card.appendChild(thumb); card.appendChild(info); card.appendChild(rm);
+      card.appendChild(thumb); card.appendChild(info);
+      attachRecentRemove(card, r);
       card.addEventListener('click', () => openFromPath(r.path));
       els.recentsList.appendChild(card);
     });
+  }
+  function renderHomeTiles(list) {
+    if (!els.homeTiles) return;
+    els.btnClearHomeRecents.classList.toggle('hidden', !list.length);
+    els.homeTiles.innerHTML = '';
+    if (!list.length) {
+      const d = document.createElement('p');
+      d.className = 'home-tiles-empty';
+      d.id = 'home-tiles-empty';
+      d.textContent = 'Files you open or save appear here, with a preview of their first page.';
+      els.homeTiles.appendChild(d);
+      els.homeTilesEmpty = d;
+      return;
+    }
+    list.forEach((r) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'home-tile';
+      tile.title = r.path;
+      tile.dataset.path = r.path.toLowerCase();
+
+      const cover = document.createElement('div');
+      cover.className = 'home-tile-cover';
+      fillRecentThumb(cover, r);
+      if (cover.classList.contains('recent-thumb-type')) {
+        cover.classList.remove('recent-thumb-type');
+        cover.classList.add('home-tile-cover-type');
+      }
+
+      const badge = document.createElement('span');
+      badge.className = 'home-tile-badge ' + kindBadgeClass(r.ext);
+      badge.textContent = EXT_STYLE[r.ext] || '?';
+      cover.appendChild(badge);
+      attachRecentRemove(cover, r);
+
+      const info = document.createElement('span');
+      info.className = 'home-tile-info';
+      const name = document.createElement('span');
+      name.className = 'home-tile-name';
+      name.textContent = r.name;
+      const meta = document.createElement('span');
+      meta.className = 'home-tile-meta';
+      meta.textContent = `${EXT_STYLE[r.ext] || '?'} · ${timeAgo(r.ts)}`;
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      tile.appendChild(cover);
+      tile.appendChild(info);
+      tile.addEventListener('click', () => openFromPath(r.path));
+      els.homeTiles.appendChild(tile);
+    });
+  }
+  async function loadRecents() {
+    const list = await window.margo.recents.list();
+    lastRecents = list;
+    renderSidebarRecents(list);
+    renderHomeTiles(list);
     markActiveRecent();
   }
 
@@ -1011,6 +1281,7 @@
       ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Cycle tabs'],
       ['Ctrl+B / Ctrl+I', 'Bold / italic while editing'],
       ['Ctrl+F', 'Find in document'],
+      ['Ctrl++ / Ctrl+- / Ctrl+0', 'Zoom in / out / reset'],
       ['Enter / Tab', 'Commit cell & move (spreadsheet)'],
       ['F2', 'Edit selected cell'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo']
     ].map(([k, v]) => `<kbd>${k}</kbd><span>${v}</span>`).join('');
@@ -1636,6 +1907,13 @@
             action: () => ed.commands.setMdMode(m)
           }))
         },
+        { label: 'Document layout', enabled: kind === 'doc', submenu: () =>
+          ['print', 'read', 'split'].map((m) => ({
+            label: m === 'print' ? 'Print Layout' : m === 'read' ? 'Read View' : 'Split View',
+            checked: !!(ed && ed.commands && ed.commands.getViewMode && ed.commands.getViewMode() === m),
+            action: () => ed.commands.setViewMode(m)
+          }))
+        },
         { label: 'Zoom', enabled: !!(ed && ed.commands && ed.commands.zoomIn), submenu: () => {
           const items = [
             { label: 'Zoom in', action: () => ed.commands.zoomIn() },
@@ -1657,17 +1935,30 @@
   }
 
   /* ---------------- sidebar wiring ---------------- */
-  document.querySelectorAll('.side-new').forEach((b) => {
-    b.addEventListener('click', () => newDocGuarded(b.dataset.new));
-    const icon = b.querySelector('.side-new-icon');
-    const kind = b.dataset.new;
-    icon.innerHTML = kind === 'md' ? window.MargoIcons.fileMd
-      : kind === 'doc' ? window.MargoIcons.fileDoc
-      : kind === 'sheet' ? window.MargoIcons.fileSheet
-      : window.MargoIcons.filePdf;
-  });
+  function wireNewButtons(selector) {
+    document.querySelectorAll(selector).forEach((b) => {
+      b.addEventListener('click', () => newDocGuarded(b.dataset.new));
+      const icon = b.querySelector('.side-new-icon, .home-new-icon');
+      const kind = b.dataset.new;
+      if (!icon) return;
+      icon.innerHTML = kind === 'md' ? window.MargoIcons.fileMd
+        : kind === 'doc' ? window.MargoIcons.fileDoc
+        : kind === 'sheet' ? window.MargoIcons.fileSheet
+        : window.MargoIcons.filePdf;
+    });
+  }
+  wireNewButtons('.side-new');
+  wireNewButtons('.home-new');
   $('btn-open-file').addEventListener('click', pickAndOpen);
-  els.btnClearRecents.addEventListener('click', async () => { await window.margo.recents.clear(); loadRecents(); });
+  if (els.btnHomeOpen) els.btnHomeOpen.addEventListener('click', pickAndOpen);
+  const clearRecents = async () => { await window.margo.recents.clear(); loadRecents(); };
+  els.btnClearRecents.addEventListener('click', clearRecents);
+  if (els.btnClearHomeRecents) els.btnClearHomeRecents.addEventListener('click', clearRecents);
+  if (els.btnSidebarSettings) {
+    const settingsIcon = $('side-settings-icon');
+    if (settingsIcon) settingsIcon.innerHTML = window.MargoIcons.settings;
+    els.btnSidebarSettings.addEventListener('click', () => showSettings(false));
+  }
   els.btnHome.addEventListener('click', () => { if (state.view === 'home') return; showLanding(); });
 
   /* ---------------- drag & drop ---------------- */
@@ -1729,6 +2020,24 @@
       e.preventDefault();
       cycleTabs(e.shiftKey ? -1 : 1);
     }
+    else if (mod && !e.shiftKey && (e.key === '=' || e.key === '+' || e.code === 'NumpadAdd')) {
+      if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomIn) {
+        e.preventDefault();
+        state.editor.commands.zoomIn();
+      }
+    }
+    else if (mod && !e.shiftKey && (e.key === '-' || e.code === 'NumpadSubtract')) {
+      if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomOut) {
+        e.preventDefault();
+        state.editor.commands.zoomOut();
+      }
+    }
+    else if (mod && !e.shiftKey && e.key === '0') {
+      if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomReset) {
+        e.preventDefault();
+        state.editor.commands.zoomReset();
+      }
+    }
     else if (e.key === 'Escape' && !els.modalBackdrop.classList.contains('hidden')) closeModal(null);
   });
 
@@ -1759,13 +2068,13 @@
     refreshHeader();
     await refreshGoogle();
     await loadRecents();
+    applyViewMode();
     const recovered = await offerRecovery();
     if (!recovered && await window.margo.firstRun()) {
       const sample = await window.margo.samplePath();
       const res = await window.margo.openPath(sample);
       if (res.ok) await mountDoc(res.doc);
     }
-    if (state.view === 'home' && !sidebarPinned) openSidebar();
   }
 
   /* test hooks (used by the smoke suite) */

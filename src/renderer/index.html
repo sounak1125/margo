@@ -70,17 +70,53 @@
           <div class="side-empty" id="side-empty">Files you open or save appear here, with a preview of their first page.</div>
         </div>
       </div>
+      <div class="side-footer">
+        <button type="button" class="side-settings" id="btn-sidebar-settings" title="Settings">
+          <span class="side-settings-icon" id="side-settings-icon"></span>
+          <span>Settings</span>
+        </button>
+      </div>
       <div class="side-resize" id="side-resize" title="Drag to resize"></div>
     </aside>
 
     <!-- Main area -->
     <main class="main">
       <section class="view view-home" id="view-landing">
-        <div class="empty">
-          <img class="empty-mascot" id="hero-mascot" src="../../assets/icon.png" width="76" height="76" alt="" />
-          <h1 class="empty-title">Margo</h1>
-          <p class="empty-sub">Hover the left edge for your library, use the File menu, or drop a file anywhere.</p>
-          <p class="empty-exts">.md&ensp;·&ensp;.docx&ensp;·&ensp;.xlsx&ensp;·&ensp;.csv&ensp;·&ensp;.pdf</p>
+        <div class="home-hub">
+          <header class="home-hero">
+            <img class="home-mascot" id="hero-mascot" src="../../assets/icon.png" width="64" height="64" alt="" />
+            <h1 class="home-title">Margo</h1>
+            <p class="home-tagline">Open a file, start something new, or pick up where you left off.</p>
+            <p class="home-exts">.md&ensp;·&ensp;.docx&ensp;·&ensp;.xlsx&ensp;·&ensp;.csv&ensp;·&ensp;.pdf</p>
+          </header>
+
+          <div class="home-create">
+            <button type="button" class="btn primary home-open" id="btn-home-open">Open file…</button>
+            <div class="home-new-row">
+              <button type="button" class="home-new" data-new="md" title="New Markdown note">
+                <span class="home-new-icon icon-md"></span><span class="home-new-label">Markdown</span>
+              </button>
+              <button type="button" class="home-new" data-new="doc" title="New Word document">
+                <span class="home-new-icon icon-doc"></span><span class="home-new-label">Document</span>
+              </button>
+              <button type="button" class="home-new" data-new="sheet" title="New spreadsheet">
+                <span class="home-new-icon icon-sheet"></span><span class="home-new-label">Sheet</span>
+              </button>
+              <button type="button" class="home-new" data-new="pdf" title="New PDF document">
+                <span class="home-new-icon icon-pdf"></span><span class="home-new-label">PDF</span>
+              </button>
+            </div>
+          </div>
+
+          <section class="home-library" aria-label="Recent documents">
+            <div class="home-library-head">
+              <h2 class="home-library-title">Recent</h2>
+              <button type="button" class="link-btn hidden" id="btn-clear-home-recents">Clear</button>
+            </div>
+            <div class="home-tiles" id="home-tiles">
+              <p class="home-tiles-empty" id="home-tiles-empty">Files you open or save appear here, with a preview of their first page.</p>
+            </div>
+          </section>
         </div>
       </section>
 

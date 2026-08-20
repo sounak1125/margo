@@ -48,6 +48,8 @@
     let textarea, preview, wrap, mode = 'split';
     let renderTimer = null;
     let zoom = 1;
+    const ZOOM_MIN = 0.5;
+    const ZOOM_MAX = 2;
     let outlineRail = null;
     const history = window.MargoHistory.create();
     let skipInputRecord = false;
@@ -65,8 +67,7 @@
     function updateStatus() {
       const text = textarea.value;
       const words = (text.trim().match(/\S+/g) || []).length;
-      const z = zoom !== 1 ? ` · ${Math.round(zoom * 100)}%` : '';
-      ctx.setStatus(`${words} word${words === 1 ? '' : 's'} · ${text.length} characters${z}`, 'Markdown');
+      ctx.setStatus(`${words} word${words === 1 ? '' : 's'} · ${text.length} characters`, 'Markdown');
       if (outlineRail && !outlineRail.classList.contains('hidden')) renderOutline();
     }
 
@@ -91,13 +92,37 @@
         }
       }
       updateStatus();
+      if (ctx.status) ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
     }
 
     function zoomBy(factor, clientX, clientY) {
-      const next = Math.min(2, Math.max(0.5, +(zoom * factor).toFixed(4)));
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom * factor).toFixed(4)));
       if (next === zoom) return;
       zoom = next;
       applyZoom(clientX, clientY);
+    }
+
+    function setZoomLevel(z, clientX, clientY) {
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z));
+      if (next === zoom) return;
+      zoom = next;
+      applyZoom(clientX, clientY);
+    }
+
+    function setupStatusChrome() {
+      if (!ctx.status) return;
+      const I = window.MargoIcons;
+      ctx.status.setKind('Markdown');
+      ctx.status.showZoom(true);
+      ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
+      ctx.status.setViewModes([
+        { id: 'write', title: 'Write', label: 'W' },
+        { id: 'split', title: 'Split', html: I.columns },
+        { id: 'read', title: 'Read', html: I.readView }
+      ]);
+      ctx.status.setViewActive(mode);
+      ctx.status.onView((m) => setMode(m));
+      ctx.status.onZoom((z) => setZoomLevel(z));
     }
 
     function onCtrlWheel(e) {
@@ -186,6 +211,7 @@
       wrap.classList.add('mode-' + m);
       ctx.toolbar.querySelectorAll('.segmented button').forEach((b) =>
         b.classList.toggle('active', b.dataset.mode === m));
+      if (ctx.status) ctx.status.setViewActive(m);
       if (m !== 'write') render();
     }
 
@@ -660,6 +686,7 @@
         render();
         updateStatus();
         setMode('split');
+        setupStatusChrome();
         wrap.addEventListener('wheel', onCtrlWheel, { passive: false });
       },
       getData() { return { markdown: textarea.value }; },
@@ -689,6 +716,7 @@
         zoomIn: () => zoomBy(1.1),
         zoomOut: () => zoomBy(1 / 1.1),
         zoomReset: () => { zoom = 1; applyZoom(); },
+        setZoom: (z) => setZoomLevel(z),
         outline: () => toggleOutlineRail(),
         stats: () => openStatsModal()
       }

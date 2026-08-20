@@ -335,6 +335,8 @@
     const history = window.MargoHistory.create();
     let skipHistory = false;
     let zoom = 1;
+    const ZOOM_MIN = 0.5;
+    const ZOOM_MAX = 2;
     let activeRibbonTab = 'home';
     let currentCalcCycle = new Set();
     let autoFilterActive = false;
@@ -635,9 +637,8 @@
     function updateStatus() {
       const d = dims();
       const used = d.rows ? `${d.rows} × ${d.cols} used` : 'empty';
-      const z = zoom !== 1 ? ` · ${Math.round(zoom * 100)}%` : '';
       const rangeText = selEnd ? `${colName(Math.min(sel.c, selEnd.c))}${Math.min(sel.r, selEnd.r) + 1}:${colName(Math.max(sel.c, selEnd.c))}${Math.max(sel.r, selEnd.r) + 1}` : `${colName(sel.c)}${sel.r + 1}`;
-      ctx.setStatus(`${rangeText}`, `Sheet ${model.active + 1} of ${model.sheets.length} · ${used}${z}`);
+      ctx.setStatus(`${rangeText}`, `Sheet ${model.active + 1} of ${model.sheets.length} · ${used}`);
 
       // Sync ribbon font controls to active cell style
       const st = (sheet().styles || {})[`${sel.r},${sel.c}`] || {};
@@ -671,13 +672,29 @@
         gridScroll.scrollTop = (gridScroll.scrollTop + my) * ratio - my;
       }
       updateStatus();
+      if (ctx.status) ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
     }
 
     function zoomBy(factor, clientX, clientY) {
-      const next = Math.min(2, Math.max(0.5, +(zoom * factor).toFixed(4)));
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom * factor).toFixed(4)));
       if (next === zoom) return;
       zoom = next;
       applyZoom(clientX, clientY);
+    }
+
+    function setZoomLevel(z, clientX, clientY) {
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z));
+      if (next === zoom) return;
+      zoom = next;
+      applyZoom(clientX, clientY);
+    }
+
+    function setupStatusChrome() {
+      if (!ctx.status) return;
+      ctx.status.setKind('Spreadsheet');
+      ctx.status.showZoom(true);
+      ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
+      ctx.status.onZoom((z) => setZoomLevel(z));
     }
 
     function onCtrlWheel(e) {
@@ -2093,6 +2110,7 @@
 
         wireEvents();
         gridScroll.addEventListener('wheel', onCtrlWheel, { passive: false });
+        setupStatusChrome();
         renderTabs();
         renderGrid();
         history.seed(captureSheet());
@@ -2143,6 +2161,7 @@
         zoomIn: () => zoomBy(1.1),
         zoomOut: () => zoomBy(1 / 1.1),
         zoomReset: () => { zoom = 1; applyZoom(); },
+        setZoom: (z) => setZoomLevel(z),
         insertChart,
         insertFx: openFunctionWizard,
         sortAsc: () => sortSelectedRange(true),

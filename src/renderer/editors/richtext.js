@@ -145,7 +145,16 @@
     let selectDragging = false;
     let selectAnchor = null;
     let crossPageRange = null;
+    let crossPageNativeIdx = -1;
     let zoom = 1;
+    const ZOOM_MIN = 0.4;
+    const ZOOM_MAX = 2.5;
+    let viewMode = 'print';
+    let editorWrap = null;
+    let splitGutter = null;
+    let splitPreviewScroll = null;
+    let splitPreviewRoot = null;
+    let splitRatio = 0.55;
     const stateButtons = {};
     let blockSelect = null, familySelect = null, variantSelect = null, sizeSelect = null;
     let availableFonts = FONT_FAMILIES.slice();
@@ -320,6 +329,7 @@
       if (!skipInputRecord && !history.isApplying()) {
         history.record(serializeDoc(), { coalesce: true });
       }
+      syncSplitPreview();
     }
 
     function scheduleTypingWork() {
@@ -632,10 +642,9 @@
       const words = (text.trim().match(/\S+/g) || []).length;
       const n = pages.length;
       const pagePart = n === 1 ? '1 page' : n + ' pages';
-      const z = zoom !== 1 ? ` · ${Math.round(zoom * 100)}%` : '';
       const geom = `${(layout.size || 'letter').toUpperCase()} · ${layout.orientation === 'landscape' ? 'Landscape' : 'Portrait'}`;
       ctx.setStatus(
-        `${pagePart} · ${words} word${words === 1 ? '' : 's'} · ${text.length} chars · ${geom}${z}`,
+        `${pagePart} · ${words} word${words === 1 ? '' : 's'} · ${text.length} chars · ${geom}`,
         'Word document'
       );
       /* "Page N of M" only moves when pages are added or removed. Rewriting
@@ -667,13 +676,98 @@
         scrollEl.scrollTop = (scrollEl.scrollTop + my) * ratio - my;
       }
       updateStatus();
+      if (ctx.status) ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
+      syncSplitPreview();
+      if (crossPageRange && crossPageRange.start && crossPageRange.end) {
+        rebuildCrossPageSelectionVisual();
+      }
     }
 
     function zoomBy(factor, clientX, clientY) {
-      const next = Math.min(2.5, Math.max(0.4, +(zoom * factor).toFixed(4)));
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom * factor).toFixed(4)));
       if (next === zoom) return;
       zoom = next;
       applyZoom(clientX, clientY);
+    }
+
+    function setZoomLevel(z, clientX, clientY) {
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z));
+      if (next === zoom) return;
+      zoom = next;
+      applyZoom(clientX, clientY);
+    }
+
+    function applySplitRatio() {
+      if (!editorWrap || viewMode !== 'split') return;
+      editorWrap.style.setProperty('--doc-split-edit', (splitRatio * 100).toFixed(1) + '%');
+    }
+
+    function syncSplitPreview() {
+      if (viewMode !== 'split' || !splitPreviewRoot || !pagesRoot) return;
+      splitPreviewRoot.innerHTML = pagesRoot.innerHTML;
+      splitPreviewRoot.className = pagesRoot.className + ' doc-pages-preview';
+      Object.keys(pagesRoot.dataset).forEach((k) => {
+        splitPreviewRoot.dataset[k] = pagesRoot.dataset[k];
+      });
+      splitPreviewRoot.style.cssText = pagesRoot.style.cssText;
+      splitPreviewRoot.querySelectorAll('.doc-page-body').forEach((b) => {
+        b.contentEditable = 'false';
+      });
+    }
+
+    function setViewMode(mode) {
+      if (!['print', 'read', 'split'].includes(mode)) return;
+      viewMode = mode;
+      if (hostEl) hostEl.dataset.docView = mode;
+      pageList().forEach((pg) => {
+        const body = pg.querySelector('.doc-page-body') || pg;
+        body.contentEditable = (mode === 'print' || mode === 'split') ? 'true' : 'false';
+      });
+      if (splitGutter) splitGutter.classList.toggle('hidden', mode !== 'split');
+      if (splitPreviewScroll) splitPreviewScroll.classList.toggle('hidden', mode !== 'split');
+      if (editorWrap) editorWrap.classList.toggle('doc-split-active', mode === 'split');
+      if (mode === 'split') {
+        applySplitRatio();
+        syncSplitPreview();
+      }
+      if (ctx.status) ctx.status.setViewActive(mode);
+    }
+
+    function wireSplitGutter() {
+      if (!splitGutter || !editorWrap) return;
+      splitGutter.addEventListener('pointerdown', (e) => {
+        if (viewMode !== 'split') return;
+        e.preventDefault();
+        const startY = e.clientY;
+        const startRatio = splitRatio;
+        const wrapH = editorWrap.getBoundingClientRect().height || 1;
+        const onMove = (ev) => {
+          splitRatio = Math.min(0.85, Math.max(0.15, startRatio + (ev.clientY - startY) / wrapH));
+          applySplitRatio();
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      });
+    }
+
+    function setupStatusChrome() {
+      if (!ctx.status) return;
+      const I = window.MargoIcons;
+      ctx.status.setKind('Word document');
+      ctx.status.showZoom(true);
+      ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
+      ctx.status.setViewModes([
+        { id: 'print', title: 'Print Layout', html: I.printLayout },
+        { id: 'read', title: 'Read View', html: I.readView },
+        { id: 'split', title: 'Split View', html: I.columns }
+      ]);
+      ctx.status.setViewActive(viewMode);
+      ctx.status.onView((m) => setViewMode(m));
+      ctx.status.onZoom((z) => setZoomLevel(z));
     }
 
     function onCtrlWheel(e) {
@@ -1083,6 +1177,7 @@
       if (changed) {
         restoreCaret(caret);
         lastPageCount = -1; // page count moved: headers and footers must catch up
+        if (crossPageRange) rebuildCrossPageSelectionVisual();
       }
       return changed;
     }
@@ -1193,12 +1288,37 @@
       return pointIsBefore(a, b) ? { start: a, end: b } : { start: b, end: a };
     }
 
+    function nearestPageAtY(y) {
+      const pages = pageList();
+      if (!pages.length) return null;
+      let best = null;
+      let bestDist = Infinity;
+      for (const page of pages) {
+        const r = page.getBoundingClientRect();
+        if (y >= r.top && y <= r.bottom) return page;
+        const dist = y < r.top ? r.top - y : y - r.bottom;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = page;
+        }
+      }
+      return best;
+    }
+
     function caretInPageBody(x, y) {
       if (!pagesRoot) return null;
       const el = document.elementFromPoint(x, y);
-      if (!el || !el.closest) return null;
-      const page = el.closest('.doc-page');
-      if (!page || !pagesRoot.contains(page)) return null;
+      let page = null;
+      if (el && el.closest) page = el.closest('.doc-page');
+      if (!page || !pagesRoot.contains(page)) {
+        page = nearestPageAtY(y);
+        if (!page) return null;
+        const body = page.querySelector('.doc-page-body');
+        if (!body) return null;
+        const br = body.getBoundingClientRect();
+        if (y < br.top + br.height / 2) return { node: body, offset: 0 };
+        return { node: body, offset: body.childNodes.length };
+      }
       const body = page.querySelector('.doc-page-body');
       if (!body) return null;
 
@@ -1227,25 +1347,114 @@
       return { node: body, offset: body.childNodes.length };
     }
 
-    function applyCrossSelection(anchor, focus) {
-      if (!anchor || !focus || !anchor.node || !focus.node) return false;
-      if (!anchor.node.isConnected || !focus.node.isConnected) return false;
+    function spanFromPoints(anchor, focus) {
+      if (!anchor || !focus || !anchor.node || !focus.node) return null;
+      if (!anchor.node.isConnected || !focus.node.isConnected) return null;
       const ordered = orderedPoints(anchor, focus);
       const startBody = pageBodyOf(ordered.start.node);
       const endBody = pageBodyOf(ordered.end.node);
-      if (!startBody || !endBody) return false;
-      if (startBody !== endBody) crossPageRange = ordered;
-      else crossPageRange = null;
+      if (!startBody || !endBody) return null;
+      const bodies = pageBodies();
+      const startIdx = bodies.indexOf(startBody);
+      const endIdx = bodies.indexOf(endBody);
+      if (startIdx < 0 || endIdx < 0) return null;
+      const lo = Math.min(startIdx, endIdx);
+      const hi = Math.max(startIdx, endIdx);
+      return { start: ordered.start, end: ordered.end, startIdx: lo, endIdx: hi, bodies };
+    }
+
+    const CROSS_SEL_HIGHLIGHT = 'margo-cross-sel';
+
+    function supportsCssHighlights() {
+      return typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined';
+    }
+
+    function clearCrossPageHighlights() {
+      if (!supportsCssHighlights()) return;
+      try { CSS.highlights.delete(CROSS_SEL_HIGHLIGHT); } catch {}
+    }
+
+    function setNativePageSelection(span, nativeBodyIdx) {
+      const body = span.bodies[nativeBodyIdx];
+      if (!body) return false;
+      try { body.focus({ preventScroll: true }); } catch { body.focus(); }
       try {
-        const range = document.createRange();
-        range.setStart(ordered.start.node, clampNodeOffset(ordered.start.node, ordered.start.offset));
-        range.setEnd(ordered.end.node, clampNodeOffset(ordered.end.node, ordered.end.offset));
+        const range = slicePageRange(body, nativeBodyIdx, span);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
         return true;
       } catch {
-        return !!crossPageRange;
+        return false;
+      }
+    }
+
+    function paintCrossPageHighlights(span, nativeBodyIdx) {
+      clearCrossPageHighlights();
+      if (!span || span.startIdx === span.endIdx || !supportsCssHighlights()) return;
+      const ranges = [];
+      for (let i = span.startIdx; i <= span.endIdx; i++) {
+        if (i === nativeBodyIdx) continue;
+        const body = span.bodies[i];
+        if (!body) continue;
+        try { ranges.push(slicePageRange(body, i, span)); } catch {}
+      }
+      if (!ranges.length) return;
+      try { CSS.highlights.set(CROSS_SEL_HIGHLIGHT, new Highlight(...ranges)); } catch {}
+    }
+
+    function rebuildCrossPageSelectionVisual() {
+      if (!crossPageRange || !crossPageRange.start || !crossPageRange.end) {
+        clearCrossPageSelection();
+        return;
+      }
+      const span = spanFromPoints(crossPageRange.start, crossPageRange.end);
+      if (!span || span.startIdx === span.endIdx) {
+        clearCrossPageSelection();
+        return;
+      }
+      let nativeIdx = crossPageNativeIdx;
+      if (nativeIdx < span.startIdx || nativeIdx > span.endIdx) nativeIdx = span.startIdx;
+      crossPageNativeIdx = nativeIdx;
+      setNativePageSelection(span, nativeIdx);
+      paintCrossPageHighlights(span, nativeIdx);
+    }
+
+    function clearCrossPageSelection() {
+      crossPageRange = null;
+      crossPageNativeIdx = -1;
+      clearCrossPageHighlights();
+    }
+
+    function applyCrossSelection(anchor, focus) {
+      const span = spanFromPoints(anchor, focus);
+      if (!span) return false;
+      const startBody = pageBodyOf(span.start.node);
+      const endBody = pageBodyOf(span.end.node);
+      const multiPage = startBody !== endBody;
+      if (multiPage) {
+        crossPageRange = { start: span.start, end: span.end };
+        const anchorBody = pageBodyOf(anchor.node);
+        let nativeIdx = anchorBody ? span.bodies.indexOf(anchorBody) : -1;
+        if (nativeIdx < span.startIdx || nativeIdx > span.endIdx) nativeIdx = span.startIdx;
+        crossPageNativeIdx = nativeIdx;
+        setNativePageSelection(span, nativeIdx);
+        paintCrossPageHighlights(span, nativeIdx);
+        return true;
+      }
+      crossPageRange = null;
+      crossPageNativeIdx = -1;
+      clearCrossPageHighlights();
+      try {
+        const range = document.createRange();
+        range.setStart(span.start.node, clampNodeOffset(span.start.node, span.start.offset));
+        range.setEnd(span.end.node, clampNodeOffset(span.end.node, span.end.offset));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return true;
+      } catch {
+        return false;
       }
     }
 
@@ -1346,6 +1555,8 @@
         skipInputRecord = false;
       }
       crossPageRange = null;
+      crossPageNativeIdx = -1;
+      clearCrossPageHighlights();
       ctx.markDirty();
       recordNow();
       const startPage = span.bodies[span.startIdx] && span.bodies[span.startIdx].closest('.doc-page');
@@ -1364,11 +1575,17 @@
       applyCrossSelection(start, end);
     }
 
+    function maybeAutoScrollDrag(y) {
+      if (!scrollEl) return;
+      const r = scrollEl.getBoundingClientRect();
+      const edge = 32;
+      if (y < r.top + edge) scrollEl.scrollTop -= 12;
+      else if (y > r.bottom - edge) scrollEl.scrollTop += 12;
+    }
+
     function onSelectPointerDown(e) {
       if (e.button !== 0 || !pagesRoot) return;
       if (e.target.closest && e.target.closest('button, input, textarea, .doc-find-bar')) return;
-      const page = e.target.closest && e.target.closest('.doc-page');
-      if (!page || !pagesRoot.contains(page)) return;
       const caret = caretInPageBody(e.clientX, e.clientY);
       const sel = window.getSelection();
       if (e.shiftKey && sel && sel.anchorNode && pageBodyOf(sel.anchorNode)) {
@@ -1377,10 +1594,10 @@
         if (caret) applyCrossSelection(selectAnchor, caret);
       } else if (caret) {
         selectAnchor = caret;
-        crossPageRange = null;
+        clearCrossPageSelection();
       } else {
         selectAnchor = null;
-        crossPageRange = null;
+        clearCrossPageSelection();
       }
       selectDragging = true;
     }
@@ -1390,10 +1607,11 @@
       if (!selectAnchor.node || !selectAnchor.node.isConnected) return;
       const caret = caretInPageBody(e.clientX, e.clientY);
       if (!caret) return;
+      maybeAutoScrollDrag(e.clientY);
       const aBody = pageBodyOf(selectAnchor.node);
       const bBody = pageBodyOf(caret.node);
-      if (!aBody || !bBody || aBody === bBody) return;
-      e.preventDefault();
+      if (!aBody || !bBody) return;
+      if (aBody !== bBody) e.preventDefault();
       applyCrossSelection(selectAnchor, caret);
     }
 
@@ -2972,6 +3190,12 @@
 
       makeSep(pView);
 
+      makeBtn(pView, 'Print Layout', I.printLayout, () => setViewMode('print'));
+      makeBtn(pView, 'Read View', I.readView, () => setViewMode('read'));
+      makeBtn(pView, 'Split View', I.columns, () => setViewMode('split'));
+
+      makeSep(pView);
+
       makeBtn(pView, 'Zoom In (Ctrl++)', I.zoomIn, () => zoomBy(1.1));
       makeBtn(pView, 'Zoom Out (Ctrl+-)', I.zoomOut, () => zoomBy(1 / 1.1));
       makeBtn(pView, 'Zoom 100% (Ctrl+0)', I.fit, () => { zoom = 1; applyZoom(); });
@@ -3016,14 +3240,20 @@
             `</div>` +
             `<div class="doc-outline-list"></div>` +
           `</aside>` +
-          `<div class="doc-scroll">` +
-            `<div class="doc-pages"></div>` +
-            `<div class="doc-fab-stack">` +
-              `<button type="button" class="doc-notes-fab" title="Notes" aria-label="Open notes">` +
-                `<span class="doc-notes-fab-icon"></span>` +
-                `<span class="doc-notes-badge hidden">0</span>` +
-              `</button>` +
-              `<button type="button" class="doc-add-page" title="Add page" aria-label="Add page">+</button>` +
+          `<div class="doc-editor-wrap">` +
+            `<div class="doc-scroll doc-scroll-edit">` +
+              `<div class="doc-pages"></div>` +
+              `<div class="doc-fab-stack">` +
+                `<button type="button" class="doc-notes-fab" title="Notes" aria-label="Open notes">` +
+                  `<span class="doc-notes-fab-icon"></span>` +
+                  `<span class="doc-notes-badge hidden">0</span>` +
+                `</button>` +
+                `<button type="button" class="doc-add-page" title="Add page" aria-label="Add page">+</button>` +
+              `</div>` +
+            `</div>` +
+            `<div class="doc-split-gutter hidden" aria-hidden="true"></div>` +
+            `<div class="doc-scroll doc-scroll-preview hidden">` +
+              `<div class="doc-pages doc-pages-preview"></div>` +
             `</div>` +
           `</div>` +
           `<aside class="doc-notes-rail hidden" aria-label="Notes">` +
@@ -3034,8 +3264,12 @@
             `<div class="doc-notes-list"></div>` +
           `</aside>`;
 
-        scrollEl = host.querySelector('.doc-scroll');
-        pagesRoot = host.querySelector('.doc-pages');
+        scrollEl = host.querySelector('.doc-scroll-edit');
+        editorWrap = host.querySelector('.doc-editor-wrap');
+        pagesRoot = host.querySelector('.doc-pages:not(.doc-pages-preview)');
+        splitGutter = host.querySelector('.doc-split-gutter');
+        splitPreviewScroll = host.querySelector('.doc-scroll-preview');
+        splitPreviewRoot = host.querySelector('.doc-pages-preview');
         notesRail = host.querySelector('.doc-notes-rail');
         notesFab = host.querySelector('.doc-notes-fab');
         notesBadge = host.querySelector('.doc-notes-badge');
@@ -3058,7 +3292,7 @@
 
         pagesRoot.addEventListener('input', () => {
           if (findHighlighting) return;
-          crossPageRange = null;
+          clearCrossPageSelection();
           ctx.markDirty();
           scheduleTypingWork();
         });
@@ -3114,6 +3348,21 @@
         notesRail.querySelector('.doc-notes-rail-close').addEventListener('click', () => toggleNotesRail(false));
         outlineRail.querySelector('.doc-outline-close').addEventListener('click', () => toggleOutlineRail(false));
         scrollEl.addEventListener('wheel', onCtrlWheel, { passive: false });
+        wireSplitGutter();
+        setupStatusChrome();
+        setViewMode('print');
+        updateStatus();
+
+        let crossSelScrollRaf = 0;
+        function onDocScrollRepaintSel() {
+          if (!crossPageRange || !crossPageRange.start || !crossPageRange.end) return;
+          if (crossSelScrollRaf) return;
+          crossSelScrollRaf = requestAnimationFrame(() => {
+            crossSelScrollRaf = 0;
+            rebuildCrossPageSelectionVisual();
+          });
+        }
+        scrollEl.addEventListener('scroll', onDocScrollRepaintSel, { passive: true });
 
         ensureFindBar();
         rehydrateNoteAnchors();
@@ -3149,7 +3398,9 @@
           document.removeEventListener('pointerup', onSelectPointerUp, true);
           selectDragging = false;
           selectAnchor = null;
-          crossPageRange = null;
+          clearCrossPageSelection();
+          if (crossSelScrollRaf) { cancelAnimationFrame(crossSelScrollRaf); crossSelScrollRaf = 0; }
+          if (scrollEl) scrollEl.removeEventListener('scroll', onDocScrollRepaintSel);
           if (pagesRoot) {
             pagesRoot.removeEventListener('pointermove', onTableResizeHover);
             pagesRoot.removeEventListener('pointerdown', onTableResizeDown, true);
@@ -3176,7 +3427,24 @@
           flushTypingWork: () => flushTypingWork(),
           pageCount: () => pageList().length,
           paginateScheduled: () => !!paginateTimer,
-          paginating: () => paginating
+          paginating: () => paginating,
+          crossPageSpan: () => getCopySpan(),
+          dragSelect: (fromBody, toBody) => {
+            if (!fromBody || !toBody) return false;
+            const start = { node: fromBody, offset: 0 };
+            const end = { node: toBody, offset: toBody.childNodes.length };
+            return applyCrossSelection(start, end);
+          },
+          crossPageHighlightActive: () => (
+            supportsCssHighlights() && CSS.highlights.has(CROSS_SEL_HIGHLIGHT)
+          ),
+          overlayBoxCount: () => document.querySelectorAll('.doc-cross-sel-box').length,
+          viewMode: () => viewMode,
+          splitPreviewVisible: () => !!(splitPreviewScroll && !splitPreviewScroll.classList.contains('hidden')),
+          pageBodiesEditable: () => pageList().every((pg) => {
+            const b = pg.querySelector('.doc-page-body');
+            return !b || b.contentEditable !== 'false';
+          })
         };
       },
       getData() {
@@ -3209,6 +3477,9 @@
         zoomIn: () => zoomBy(1.1),
         zoomOut: () => zoomBy(1 / 1.1),
         zoomReset: () => { zoom = 1; applyZoom(); },
+        setZoom: (z) => setZoomLevel(z),
+        setViewMode: (m) => setViewMode(m),
+        getViewMode: () => viewMode,
         outline: () => toggleOutlineRail(),
         stats: () => openStatsModal(),
         focusMode: () => toggleFocusMode(),
