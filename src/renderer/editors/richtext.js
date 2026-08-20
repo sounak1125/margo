@@ -144,6 +144,11 @@
     let savedRange = null;
     let selectDragging = false;
     let selectAnchor = null;
+    let lastDragClientX = 0;
+    let lastDragClientY = 0;
+    let selectCrossLock = false;
+    let selectCrossLockX = 0;
+    let selectCrossLockY = 0;
     let crossPageRange = null;
     let crossPageNativeIdx = -1;
     let zoom = 1;
@@ -1305,12 +1310,14 @@
       return best;
     }
 
-    function caretInPageBody(x, y) {
+    function caretInPageBody(x, y, opts) {
+      const allowGap = !opts || opts.allowGap !== false;
       if (!pagesRoot) return null;
       const el = document.elementFromPoint(x, y);
       let page = null;
       if (el && el.closest) page = el.closest('.doc-page');
       if (!page || !pagesRoot.contains(page)) {
+        if (!allowGap) return null;
         page = nearestPageAtY(y);
         if (!page) return null;
         const body = page.querySelector('.doc-page-body');
@@ -1377,7 +1384,9 @@
     function setNativePageSelection(span, nativeBodyIdx) {
       const body = span.bodies[nativeBodyIdx];
       if (!body) return false;
-      try { body.focus({ preventScroll: true }); } catch { body.focus(); }
+      if (document.activeElement !== body) {
+        try { body.focus({ preventScroll: true }); } catch { body.focus(); }
+      }
       try {
         const range = slicePageRange(body, nativeBodyIdx, span);
         const sel = window.getSelection();
@@ -1576,48 +1585,87 @@
     }
 
     function maybeAutoScrollDrag(y) {
-      if (!scrollEl) return;
+      if (!scrollEl) return false;
       const r = scrollEl.getBoundingClientRect();
       const edge = 32;
+      const before = scrollEl.scrollTop;
       if (y < r.top + edge) scrollEl.scrollTop -= 12;
       else if (y > r.bottom - edge) scrollEl.scrollTop += 12;
+      return scrollEl.scrollTop !== before;
+    }
+
+    function endSelectDrag() {
+      selectDragging = false;
+      selectAnchor = null;
+      selectCrossLock = false;
+    }
+
+    function onSelectWheelLock(e) {
+      if (e.ctrlKey || e.metaKey) return;
+      if (!selectDragging) return;
+      /* Trackpad/wheel moves pages under a still pointer. Freeze crossing
+         pages until the mouse actually moves again. */
+      selectCrossLock = true;
+      selectCrossLockX = e.clientX;
+      selectCrossLockY = e.clientY;
     }
 
     function onSelectPointerDown(e) {
       if (e.button !== 0 || !pagesRoot) return;
       if (e.target.closest && e.target.closest('button, input, textarea, .doc-find-bar')) return;
-      const caret = caretInPageBody(e.clientX, e.clientY);
+      const caret = caretInPageBody(e.clientX, e.clientY, { allowGap: false });
       const sel = window.getSelection();
+      lastDragClientX = e.clientX;
+      lastDragClientY = e.clientY;
+      selectCrossLock = false;
       if (e.shiftKey && sel && sel.anchorNode && pageBodyOf(sel.anchorNode)) {
         e.preventDefault();
         selectAnchor = { node: sel.anchorNode, offset: sel.anchorOffset };
         if (caret) applyCrossSelection(selectAnchor, caret);
-      } else if (caret) {
-        selectAnchor = caret;
-        clearCrossPageSelection();
-      } else {
-        selectAnchor = null;
-        clearCrossPageSelection();
+        selectDragging = true;
+        return;
       }
+      if (!caret) {
+        endSelectDrag();
+        clearCrossPageSelection();
+        return;
+      }
+      e.preventDefault();
+      selectAnchor = caret;
+      clearCrossPageSelection();
       selectDragging = true;
+      applyCrossSelection(selectAnchor, selectAnchor);
     }
 
     function onSelectPointerMove(e) {
       if (!selectDragging || !selectAnchor || !(e.buttons & 1)) return;
       if (!selectAnchor.node || !selectAnchor.node.isConnected) return;
-      const caret = caretInPageBody(e.clientX, e.clientY);
+      if (selectCrossLock) {
+        const dist = Math.hypot(e.clientX - selectCrossLockX, e.clientY - selectCrossLockY);
+        if (dist >= 16) selectCrossLock = false;
+      }
+      const moved = e.clientX !== lastDragClientX || e.clientY !== lastDragClientY;
+      const scrolled = !selectCrossLock && maybeAutoScrollDrag(e.clientY);
+      lastDragClientX = e.clientX;
+      lastDragClientY = e.clientY;
+      if (!moved && !scrolled) return;
+      const allowGap = !selectCrossLock;
+      const caret = caretInPageBody(e.clientX, e.clientY, { allowGap });
       if (!caret) return;
-      maybeAutoScrollDrag(e.clientY);
       const aBody = pageBodyOf(selectAnchor.node);
       const bBody = pageBodyOf(caret.node);
       if (!aBody || !bBody) return;
-      if (aBody !== bBody) e.preventDefault();
+      if (selectCrossLock && aBody !== bBody) return;
+      e.preventDefault();
       applyCrossSelection(selectAnchor, caret);
     }
 
     function onSelectPointerUp() {
-      selectDragging = false;
-      selectAnchor = null;
+      endSelectDrag();
+    }
+
+    function onSelectPointerCancel() {
+      endSelectDrag();
     }
 
     function onPageCopy(e) {
@@ -3313,6 +3361,7 @@
         pagesRoot.addEventListener('keydown', onPageKeydown);
         document.addEventListener('pointermove', onSelectPointerMove, true);
         document.addEventListener('pointerup', onSelectPointerUp, true);
+        document.addEventListener('pointercancel', onSelectPointerCancel, true);
         document.addEventListener('selectionchange', onSelChange);
         document.addEventListener('keydown', onFindKeydown, true);
 
@@ -3348,21 +3397,10 @@
         notesRail.querySelector('.doc-notes-rail-close').addEventListener('click', () => toggleNotesRail(false));
         outlineRail.querySelector('.doc-outline-close').addEventListener('click', () => toggleOutlineRail(false));
         scrollEl.addEventListener('wheel', onCtrlWheel, { passive: false });
+        scrollEl.addEventListener('wheel', onSelectWheelLock, { passive: true });
         wireSplitGutter();
         setupStatusChrome();
         setViewMode('print');
-        updateStatus();
-
-        let crossSelScrollRaf = 0;
-        function onDocScrollRepaintSel() {
-          if (!crossPageRange || !crossPageRange.start || !crossPageRange.end) return;
-          if (crossSelScrollRaf) return;
-          crossSelScrollRaf = requestAnimationFrame(() => {
-            crossSelScrollRaf = 0;
-            rebuildCrossPageSelectionVisual();
-          });
-        }
-        scrollEl.addEventListener('scroll', onDocScrollRepaintSel, { passive: true });
 
         ensureFindBar();
         rehydrateNoteAnchors();
@@ -3396,11 +3434,9 @@
           document.removeEventListener('keydown', onFindKeydown, true);
           document.removeEventListener('pointermove', onSelectPointerMove, true);
           document.removeEventListener('pointerup', onSelectPointerUp, true);
-          selectDragging = false;
-          selectAnchor = null;
+          document.removeEventListener('pointercancel', onSelectPointerCancel, true);
+          endSelectDrag();
           clearCrossPageSelection();
-          if (crossSelScrollRaf) { cancelAnimationFrame(crossSelScrollRaf); crossSelScrollRaf = 0; }
-          if (scrollEl) scrollEl.removeEventListener('scroll', onDocScrollRepaintSel);
           if (pagesRoot) {
             pagesRoot.removeEventListener('pointermove', onTableResizeHover);
             pagesRoot.removeEventListener('pointerdown', onTableResizeDown, true);
@@ -3410,7 +3446,10 @@
             pagesRoot.removeEventListener('keydown', onPageKeydown);
             pagesRoot.style.cursor = '';
           }
-          if (scrollEl) scrollEl.removeEventListener('wheel', onCtrlWheel);
+          if (scrollEl) {
+            scrollEl.removeEventListener('wheel', onCtrlWheel);
+            scrollEl.removeEventListener('wheel', onSelectWheelLock);
+          }
           if (document.body.classList.contains('margo-focus-mode')) toggleFocusMode();
           unwrapFindMarks();
         };
