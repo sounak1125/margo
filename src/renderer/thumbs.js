@@ -3,6 +3,11 @@
   const W = 440, H = 568;           // 2× stored pixels (portrait card)
   const PAGE_W = 640;               // virtual page width inside foreignObject
   const INNER = { x: 28, y: 36, w: W - 56, h: H - 72 };
+  const THUMB_IMG_MAX = 200;
+  const SVG_TIMEOUT = 8000;
+  const VOID_TAGS = new Set([
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'
+  ]);
 
   const KINDS = {
     md: { accent: '#f2b40a', soft: '#fdf1cf', label: 'MD', ink: '#8a6400' },
@@ -51,6 +56,24 @@
     a { color: ${k.ink}; text-decoration: none; }`;
   }
 
+  function thumbContentCss(kind) {
+    const k = KINDS[kind] || KINDS.md;
+    return `
+    h1 { font-size: 26px; margin: 0 0 12px; font-weight: 700; }
+    h2 { font-size: 20px; margin: 14px 0 8px; font-weight: 700; }
+    h3 { font-size: 16px; margin: 12px 0 6px; font-weight: 600; }
+    p, ul, ol, pre, blockquote, table { margin-bottom: 9px; }
+    ul, ol { padding-left: 22px; }
+    code, pre { font-family: Consolas, monospace; font-size: 13px; background: #f2f2f0; border-radius: 4px; }
+    pre { padding: 8px 10px; overflow: hidden; }
+    code { padding: 1px 4px; }
+    blockquote { border-left: 3px solid ${k.accent}; padding-left: 10px; color: #6e6e73; }
+    table { border-collapse: collapse; font-size: 13px; }
+    td, th { border: 1px solid #d9d9d6; padding: 3px 8px; }
+    img { max-width: 100%; height: auto; }
+    a { color: ${k.ink}; text-decoration: none; }`;
+  }
+
   function framedSvg(kind, innerHtml) {
     const k = KINDS[kind] || KINDS.md;
     return (
@@ -75,6 +98,13 @@
     return div.innerHTML;
   }
 
+  function stripAllImages(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('img').forEach((img) => img.remove());
+    return div.innerHTML;
+  }
+
   function firstDocPageHtml(html) {
     const wrap = document.createElement('div');
     wrap.innerHTML = DOMPurify.sanitize(html || '<p></p>');
@@ -94,14 +124,156 @@
     return parts[0] || '<p></p>';
   }
 
-  function svgToPng(svgMarkup) {
+  function escapeXml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function htmlToXhtmlFragment(html) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+
+    function serialize(node) {
+      if (node.nodeType === 3) return escapeXml(node.textContent);
+      if (node.nodeType === 8) return '';
+      if (node.nodeType !== 1) return '';
+      const tag = node.tagName.toLowerCase();
+      let attrs = '';
+      for (const a of node.attributes) {
+        attrs += ` ${a.name}="${escapeXml(a.value)}"`;
+      }
+      if (VOID_TAGS.has(tag)) return `<${tag}${attrs}/>`;
+      let inner = '';
+      for (const ch of node.childNodes) inner += serialize(ch);
+      return `<${tag}${attrs}>${inner}</${tag}>`;
+    }
+
+    let out = '';
+    for (const ch of wrap.childNodes) out += serialize(ch);
+    return out || '<p></p>';
+  }
+
+  function serializeElementTree(root) {
+    function serialize(node) {
+      if (node.nodeType === 3) return escapeXml(node.textContent);
+      if (node.nodeType === 8) return '';
+      if (node.nodeType !== 1) return '';
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'script') return '';
+      let attrs = '';
+      for (const a of node.attributes) {
+        attrs += ` ${a.name}="${escapeXml(a.value)}"`;
+      }
+      if (VOID_TAGS.has(tag)) return `<${tag}${attrs}/>`;
+      let inner = '';
+      for (const ch of node.childNodes) inner += serialize(ch);
+      return `<${tag}${attrs}>${inner}</${tag}>`;
+    }
+    return serialize(root);
+  }
+
+  function buildThumbCardElement(kind, pageHtml) {
+    const k = KINDS[kind] || KINDS.md;
+    const scale = INNER.w / PAGE_W;
+    const card = document.createElement('div');
+    card.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+    card.style.cssText =
+      `position:relative;width:${W}px;height:${H}px;background:#f3f2ef;` +
+      `font-family:'Segoe UI',system-ui,sans-serif;`;
+
+    const styleEl = document.createElement('style');
+    styleEl.textContent = thumbContentCss(kind);
+    card.appendChild(styleEl);
+
+    const frame = document.createElement('div');
+    frame.style.cssText =
+      'position:absolute;left:14px;top:14px;right:14px;bottom:14px;background:#ffffff;' +
+      'border-radius:10px;border:1px solid #e4e4e0;overflow:hidden;' +
+      'box-shadow:0 1px 2px rgba(20,20,15,0.06),0 10px 28px rgba(20,20,15,0.08);';
+
+    const accent = document.createElement('div');
+    accent.style.cssText = `position:absolute;left:0;top:0;bottom:0;width:6px;background:${k.accent};`;
+
+    const badge = document.createElement('div');
+    badge.textContent = k.label;
+    badge.style.cssText =
+      `position:absolute;top:12px;right:12px;z-index:2;font-size:11px;font-weight:700;` +
+      `letter-spacing:0.06em;color:${k.ink};background:${k.soft};border-radius:6px;padding:3px 7px;`;
+
+    const tpage = document.createElement('div');
+    tpage.style.cssText =
+      `position:absolute;left:${INNER.x - 14}px;top:${INNER.y - 14}px;width:${PAGE_W}px;` +
+      `padding:36px 40px;background:#ffffff;color:#1d1d1f;font-size:15px;line-height:1.55;` +
+      `transform:scale(${scale});transform-origin:top left;height:${INNER.h / scale}px;overflow:hidden;`;
+    tpage.innerHTML = pageHtml;
+
+    frame.appendChild(accent);
+    frame.appendChild(badge);
+    frame.appendChild(tpage);
+    card.appendChild(frame);
+    return card;
+  }
+
+  function shrinkDataUrl(dataUrl, maxW) {
     return new Promise((resolve) => {
       const img = new Image();
-      const done = (url) => resolve(url);
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h) return resolve(null);
+          const scale = w > maxW ? maxW / w : 1;
+          const cw = Math.max(1, Math.round(w * scale));
+          const ch = Math.max(1, Math.round(h * scale));
+          const c = document.createElement('canvas');
+          c.width = cw;
+          c.height = ch;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, cw, ch);
+          ctx.drawImage(img, 0, 0, cw, ch);
+          resolve(c.toDataURL('image/jpeg', 0.72));
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
+
+  async function downscaleDataImages(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const imgs = [...div.querySelectorAll('img')];
+    for (const img of imgs) {
+      const src = img.getAttribute('src') || '';
+      if (!/^data:/.test(src)) {
+        img.remove();
+        continue;
+      }
+      const small = await shrinkDataUrl(src, THUMB_IMG_MAX);
+      if (small) img.setAttribute('src', small);
+      else img.remove();
+    }
+    return div.innerHTML;
+  }
+
+  function svgToPng(svgMarkup) {
+    return new Promise((resolve) => {
+      const blob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      const img = new Image();
+      let settled = false;
+      const done = (url) => {
+        if (settled) return;
+        settled = true;
+        URL.revokeObjectURL(blobUrl);
+        resolve(url);
+      };
       img.onload = () => {
         try {
           const c = document.createElement('canvas');
-          c.width = W; c.height = H;
+          c.width = W;
+          c.height = H;
           const ctx = c.getContext('2d');
           ctx.fillStyle = '#f3f2ef';
           ctx.fillRect(0, 0, W, H);
@@ -110,19 +282,65 @@
         } catch { done(null); }
       };
       img.onerror = () => done(null);
-      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgMarkup);
-      setTimeout(() => done(null), 3500);
+      img.src = blobUrl;
+      setTimeout(() => done(null), SVG_TIMEOUT);
     });
   }
 
-  async function htmlThumb(kind, html) {
-    const clean = stripRemoteImages(DOMPurify.sanitize(html || '<p></p>'));
-    return svgToPng(framedSvg(kind, clean));
+  async function rasterizeHtmlThumb(kind, html) {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-12000px;top:0;opacity:0;pointer-events:none;overflow:hidden;';
+    const card = buildThumbCardElement(kind, html);
+    host.appendChild(card);
+    document.body.appendChild(host);
+    void card.offsetHeight;
+    try {
+      const inner = serializeElementTree(card);
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
+        `<foreignObject width="100%" height="100%">${inner}</foreignObject></svg>`;
+      return await svgToPng(svg);
+    } finally {
+      host.remove();
+    }
   }
 
-  function escapeXml(s) {
-    return String(s).replace(/[&<>"']/g, (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function ensurePng(dataUrl) {
+    return new Promise((resolve) => {
+      if (!dataUrl) return resolve(null);
+      if (/^data:image\/png/i.test(dataUrl)) return resolve(dataUrl);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = W;
+          c.height = H;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#f3f2ef';
+          ctx.fillRect(0, 0, W, H);
+          ctx.drawImage(img, 0, 0, W, H);
+          resolve(c.toDataURL('image/png'));
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
+
+  async function readEmbeddedDocxThumb(filePath) {
+    try {
+      const res = await window.margo.readDocxThumb(filePath);
+      if (!res || !res.ok || !res.dataUrl) return null;
+      return ensurePng(res.dataUrl);
+    } catch { return null; }
+  }
+
+  async function htmlThumb(kind, html) {
+    const sanitized = DOMPurify.sanitize(html || '<p></p>');
+    const withImages = await downscaleDataImages(stripRemoteImages(sanitized));
+    let url = await rasterizeHtmlThumb(kind, withImages);
+    if (!url) url = await rasterizeHtmlThumb(kind, stripAllImages(withImages));
+    return url;
   }
 
   function sheetThumb(sheets, active) {
@@ -183,7 +401,7 @@
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, c.width, c.height);
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
-      const pageUrl = c.toDataURL('image/png');
+      const pageUrl = c.toDataURL('image/jpeg', 0.82);
       doc.destroy();
 
       const k = KINDS.pdf;
@@ -205,13 +423,13 @@
   /* Generate + persist a thumbnail for a saved document. data = editor data (fresh) */
   async function generate(doc, data) {
     if (!doc || !doc.path) return null;
+    if (doc.kind === 'md') return null;
     try {
       let url = null;
-      if (doc.kind === 'md') {
-        url = await htmlThumb('md', marked.parse((data && data.markdown) ?? doc.markdown ?? ''));
-      } else if (doc.kind === 'doc') {
+      if (doc.kind === 'doc') {
         const full = (data && data.html) ?? doc.html ?? '';
         url = await htmlThumb('doc', firstDocPageHtml(full));
+        if (!url && doc.path) url = await readEmbeddedDocxThumb(doc.path);
       } else if (doc.kind === 'sheet') {
         const d = data || doc;
         url = await sheetThumb(d.sheets, d.active);
@@ -260,5 +478,5 @@
     } catch { return null; }
   }
 
-  window.MargoThumbs = { generate, toJpegDataUrl, jpegForDoc };
+  window.MargoThumbs = { generate, toJpegDataUrl, jpegForDoc, ensurePng };
 })();

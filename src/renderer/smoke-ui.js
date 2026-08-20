@@ -398,6 +398,8 @@
       t('doc -> md export (real IPC)', r && r.ok, r && r.error);
       r = await T.saveTo(joinTmp('ui-out.docx'));
       t('doc save as docx (real IPC)', r && r.ok, r && r.error);
+      const docThumbUrl = await window.MargoThumbs.generate(T.state.doc, T.getEditor().getData());
+      t('doc thumbnail generates', !!docThumbUrl && docThumbUrl.length > 500);
       t('doc -> pdf export (printToPDF)', await T.exportTo(joinTmp('export-doc.pdf')));
       T.state.dirty = false;
 
@@ -535,21 +537,25 @@
       T.state.dirty = false;
       if (T.state.activeTabId) await T.closeTab(T.state.activeTabId);
 
-      // 7. md thumbnail (foreignObject pipeline)
+      // 7. md library thumb skipped (Markdown recents use type icons)
       await T.openFromPath(cfg.welcomePath);
       const mdThumbUrl = await window.MargoThumbs.generate(T.state.doc, T.getEditor().getData());
-      t('md thumbnail generates', !!mdThumbUrl && mdThumbUrl.length > 500);
+      t('md library thumb skipped', mdThumbUrl == null);
       T.state.dirty = false;
 
       // 8. back home + home tiles populated with thumbs
       T.showLanding();
-      await wait(400);
+      for (let i = 0; i < 40 && document.querySelectorAll('.home-tile-cover:not(.home-tile-cover-type) img').length < 1; i++) {
+        await wait(200);
+      }
+      await wait(200);
       t('landing returns', T.state.view === 'home');
       t('sidebar hidden after home', shell.classList.contains('view-home'));
       const tiles = document.querySelectorAll('.home-tile');
       t('recents populated', tiles.length >= 1, `${tiles.length} tiles`);
-      t('recents show thumbnails', document.querySelectorAll('.home-tile-cover img').length >= 2,
-        `${document.querySelectorAll('.home-tile-cover img').length} thumbs`);
+      t('md recent uses type icon', !!document.querySelector('.home-tile-cover-type img'));
+      t('recents show content thumbnails', document.querySelectorAll('.home-tile-cover:not(.home-tile-cover-type) img').length >= 1,
+        `${document.querySelectorAll('.home-tile-cover:not(.home-tile-cover-type) img').length} content thumbs`);
       await shot('landing-recents.png');
     } catch (err) {
       t('suite crashed', false, err.stack || err.message);

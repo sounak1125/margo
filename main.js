@@ -211,6 +211,15 @@ ipcMain.handle('file:open', async (_e, filePath) => {
   }
 });
 
+ipcMain.handle('file:peek', async (_e, filePath) => {
+  try {
+    const doc = await files.openPath(filePath);
+    return { ok: true, doc };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
 ipcMain.handle('file:save', async (_e, req) => {
   try {
     await files.save(req);
@@ -254,11 +263,19 @@ function thumbFile(filePath) {
 
 ipcMain.handle('thumbs:set', (_e, { path: filePath, dataUrl }) => {
   try {
-    const m = /^data:image\/png;base64,(.+)$/.exec(dataUrl || '');
+    const m = /^data:image\/(?:png|jpeg|jpg);base64,(.+)$/i.exec(dataUrl || '');
     if (!m || !filePath) return false;
     fs.writeFileSync(thumbFile(filePath), Buffer.from(m[1], 'base64'));
     return true;
   } catch { return false; }
+});
+
+ipcMain.handle('file:docx-thumb', async (_e, filePath) => {
+  try {
+    return { ok: true, dataUrl: await files.readDocxEmbeddedThumb(filePath) };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
 });
 
 ipcMain.handle('file:read-binary', async (_e, filePath) => {

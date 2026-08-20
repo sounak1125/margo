@@ -847,16 +847,22 @@
 
   /* ---------------- thumbnails ---------------- */
   let thumbTimer = null;
+  async function refreshLibraryThumb(data) {
+    if (!state.doc?.path || state.doc.kind === 'md') return;
+    try {
+      const url = await window.MargoThumbs.generate(state.doc, data);
+      if (url) loadRecents();
+    } catch {}
+  }
   function scheduleThumb() {
     clearTimeout(thumbTimer);
-    if (!state.doc || !state.doc.path) return;
+    if (!state.doc || !state.doc.path || state.doc.kind === 'md') return;
     thumbTimer = setTimeout(async () => {
       try {
         const data = state.editor && state.editor.kind !== 'pdf'
           ? await Promise.resolve(state.editor.getData())
           : null;
-        await window.MargoThumbs.generate(state.doc, data);
-        loadRecents();
+        await refreshLibraryThumb(data);
       } catch {}
     }, 350);
   }
@@ -986,7 +992,7 @@
       paintTabs();
       refreshHeader();
       await afterLocalSave(path, name, path);
-      scheduleThumb();
+      await refreshLibraryThumb(data);
       return true;
     }
 
@@ -1006,7 +1012,7 @@
       paintTabs();
       refreshHeader();
       await afterLocalSave(res.path, state.doc.name, fromPath);
-      scheduleThumb();
+      await refreshLibraryThumb(data);
     } else {
       // cross-format export: file written, but the open buffer keeps its own format
       toast(`Exported to ${res.path.split(/[\\/]/).pop()} — still editing the ${KIND_LABEL[kind].toLowerCase()}`);
@@ -1050,6 +1056,10 @@
     xlsx: 'sheet', csv: 'sheet',
     pdf: 'pdf'
   };
+  const THUMB_EXTS = new Set(['docx', 'pdf', 'xlsx', 'csv']);
+  function recentWantsContentThumb(r) {
+    return THUMB_EXTS.has(r.ext);
+  }
   function timeAgo(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return 'just now';
@@ -1063,7 +1073,7 @@
     return kind ? `kind-${kind}` : '';
   }
   function fillRecentThumb(thumb, r) {
-    if (r.thumb) {
+    if (recentWantsContentThumb(r) && r.thumb) {
       const img = document.createElement('img');
       img.src = r.thumb;
       img.alt = '';
@@ -1193,6 +1203,43 @@
     renderSidebarRecents(list);
     renderHomeTiles(list);
     markActiveRecent();
+    queueThumbBackfill(list);
+  }
+
+  const thumbBackfillQueue = [];
+  const thumbBackfillSeen = new Set();
+  let thumbBackfillRunning = false;
+
+  function queueThumbBackfill(list) {
+    for (const r of list) {
+      if (!recentWantsContentThumb(r) || r.thumb) continue;
+      if (thumbBackfillSeen.has(r.path) || thumbBackfillQueue.includes(r.path)) continue;
+      thumbBackfillQueue.push(r.path);
+    }
+    runThumbBackfill();
+  }
+
+  async function runThumbBackfill() {
+    if (thumbBackfillRunning) return;
+    thumbBackfillRunning = true;
+    while (thumbBackfillQueue.length) {
+      const p = thumbBackfillQueue.shift();
+      try {
+        const res = await window.margo.peekPath(p);
+        if (!res.ok || !res.doc) continue;
+        const url = await window.MargoThumbs.generate(res.doc, res.doc);
+        if (url) {
+          thumbBackfillSeen.add(p);
+          const list = await window.margo.recents.list();
+          lastRecents = list;
+          renderSidebarRecents(list);
+          renderHomeTiles(list);
+          markActiveRecent();
+        }
+      } catch {}
+    }
+    thumbBackfillRunning = false;
+    if (thumbBackfillQueue.length) runThumbBackfill();
   }
 
   /* ---------------- sliding sidebar ---------------- */

@@ -794,6 +794,22 @@ async function maybeEmbedDocxThumb(docxBuf, thumbDataUrl) {
   }
 }
 
+async function readDocxEmbeddedThumb(filePath) {
+  try {
+    const zip = await JSZip.loadAsync(await fsp.readFile(filePath));
+    const jpeg = zip.file('docProps/thumbnail.jpeg');
+    const png = zip.file('docProps/thumbnail.png');
+    const part = jpeg || png;
+    if (!part) return null;
+    const buf = await part.async('nodebuffer');
+    if (!buf || buf.length < 200) return null;
+    const mime = jpeg ? 'image/jpeg' : 'image/png';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
 const MARGO_NOTES_PART = 'customXml/margo-notes.json';
 const MARGO_NOTES_CT = 'application/json';
 
@@ -1173,6 +1189,7 @@ module.exports = {
   htmlToDocxBuffer,
   embedDocxThumbnail,
   maybeEmbedDocxThumb,
+  readDocxEmbeddedThumb,
   readDocxNotes,
   embedDocxNotes,
   maybeEmbedDocxNotes,

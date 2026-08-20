@@ -9,6 +9,7 @@ function on(channel, cb) {
 contextBridge.exposeInMainWorld('margo', {
   pickOpen: () => ipcRenderer.invoke('dialog:open'),
   openPath: (p) => ipcRenderer.invoke('file:open', p),
+  peekPath: (p) => ipcRenderer.invoke('file:peek', p),
   readBinary: (p) => ipcRenderer.invoke('file:read-binary', p),
   save: (req) => ipcRenderer.invoke('file:save', req),
   saveAs: (req) => ipcRenderer.invoke('file:save-as', req),
@@ -19,6 +20,7 @@ contextBridge.exposeInMainWorld('margo', {
   quit: () => ipcRenderer.invoke('app:quit'),
   version: () => ipcRenderer.invoke('app:version'),
   setThumb: (p, dataUrl) => ipcRenderer.invoke('thumbs:set', { path: p, dataUrl }),
+  readDocxThumb: (p) => ipcRenderer.invoke('file:docx-thumb', p),
 
   recents: {
     list: () => ipcRenderer.invoke('recents:list'),
