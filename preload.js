@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('margo', {
   quit: () => ipcRenderer.invoke('app:quit'),
   version: () => ipcRenderer.invoke('app:version'),
   setThumb: (p, dataUrl) => ipcRenderer.invoke('thumbs:set', { path: p, dataUrl }),
+  renderHtmlThumb: (req) => ipcRenderer.invoke('thumbs:render-html', req),
   readDocxThumb: (p) => ipcRenderer.invoke('file:docx-thumb', p),
 
   recents: {

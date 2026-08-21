@@ -1,13 +1,12 @@
-/* Margo — first-page typed thumbnails for the sidebar library (SVG → HiDPI PNG). */
+/* Margo — first-page typed thumbnails for the sidebar library. Sheets and PDFs
+   rasterize here as plain SVG; document cards are laid out as HTML and captured
+   by the main process (see rasterizeHtmlThumb for why). */
 (function () {
   const W = 440, H = 568;           // 2× stored pixels (portrait card)
-  const PAGE_W = 640;               // virtual page width inside foreignObject
+  const PAGE_W = 640;               // virtual page width the card content is scaled from
   const INNER = { x: 28, y: 36, w: W - 56, h: H - 72 };
   const THUMB_IMG_MAX = 200;
   const SVG_TIMEOUT = 8000;
-  const VOID_TAGS = new Set([
-    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'
-  ]);
 
   const KINDS = {
     md: { accent: '#f2b40a', soft: '#fdf1cf', label: 'MD', ink: '#8a6400' },
@@ -56,39 +55,6 @@
     a { color: ${k.ink}; text-decoration: none; }`;
   }
 
-  function thumbContentCss(kind) {
-    const k = KINDS[kind] || KINDS.md;
-    return `
-    h1 { font-size: 26px; margin: 0 0 12px; font-weight: 700; }
-    h2 { font-size: 20px; margin: 14px 0 8px; font-weight: 700; }
-    h3 { font-size: 16px; margin: 12px 0 6px; font-weight: 600; }
-    p, ul, ol, pre, blockquote, table { margin-bottom: 9px; }
-    ul, ol { padding-left: 22px; }
-    code, pre { font-family: Consolas, monospace; font-size: 13px; background: #f2f2f0; border-radius: 4px; }
-    pre { padding: 8px 10px; overflow: hidden; }
-    code { padding: 1px 4px; }
-    blockquote { border-left: 3px solid ${k.accent}; padding-left: 10px; color: #6e6e73; }
-    table { border-collapse: collapse; font-size: 13px; }
-    td, th { border: 1px solid #d9d9d6; padding: 3px 8px; }
-    img { max-width: 100%; height: auto; }
-    a { color: ${k.ink}; text-decoration: none; }`;
-  }
-
-  function framedSvg(kind, innerHtml) {
-    const k = KINDS[kind] || KINDS.md;
-    return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
-      `<foreignObject width="100%" height="100%">` +
-      `<div xmlns="http://www.w3.org/1999/xhtml" class="card" style="position:relative;width:${W}px;height:${H}px;background:#f3f2ef;font-family:'Segoe UI',system-ui,sans-serif">` +
-      `<style>${thumbCss(kind)}</style>` +
-      `<div class="frame">` +
-      `<div class="accent"></div>` +
-      `<div class="badge">${k.label}</div>` +
-      `<div class="tpage">${innerHtml}</div>` +
-      `</div></div></foreignObject></svg>`
-    );
-  }
-
   function stripRemoteImages(html) {
     const div = document.createElement('div');
     div.innerHTML = html;
@@ -127,91 +93,6 @@
   function escapeXml(s) {
     return String(s).replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-
-  function htmlToXhtmlFragment(html) {
-    const wrap = document.createElement('div');
-    wrap.innerHTML = html;
-
-    function serialize(node) {
-      if (node.nodeType === 3) return escapeXml(node.textContent);
-      if (node.nodeType === 8) return '';
-      if (node.nodeType !== 1) return '';
-      const tag = node.tagName.toLowerCase();
-      let attrs = '';
-      for (const a of node.attributes) {
-        attrs += ` ${a.name}="${escapeXml(a.value)}"`;
-      }
-      if (VOID_TAGS.has(tag)) return `<${tag}${attrs}/>`;
-      let inner = '';
-      for (const ch of node.childNodes) inner += serialize(ch);
-      return `<${tag}${attrs}>${inner}</${tag}>`;
-    }
-
-    let out = '';
-    for (const ch of wrap.childNodes) out += serialize(ch);
-    return out || '<p></p>';
-  }
-
-  function serializeElementTree(root) {
-    function serialize(node) {
-      if (node.nodeType === 3) return escapeXml(node.textContent);
-      if (node.nodeType === 8) return '';
-      if (node.nodeType !== 1) return '';
-      const tag = node.tagName.toLowerCase();
-      if (tag === 'script') return '';
-      let attrs = '';
-      for (const a of node.attributes) {
-        attrs += ` ${a.name}="${escapeXml(a.value)}"`;
-      }
-      if (VOID_TAGS.has(tag)) return `<${tag}${attrs}/>`;
-      let inner = '';
-      for (const ch of node.childNodes) inner += serialize(ch);
-      return `<${tag}${attrs}>${inner}</${tag}>`;
-    }
-    return serialize(root);
-  }
-
-  function buildThumbCardElement(kind, pageHtml) {
-    const k = KINDS[kind] || KINDS.md;
-    const scale = INNER.w / PAGE_W;
-    const card = document.createElement('div');
-    card.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-    card.style.cssText =
-      `position:relative;width:${W}px;height:${H}px;background:#f3f2ef;` +
-      `font-family:'Segoe UI',system-ui,sans-serif;`;
-
-    const styleEl = document.createElement('style');
-    styleEl.textContent = thumbContentCss(kind);
-    card.appendChild(styleEl);
-
-    const frame = document.createElement('div');
-    frame.style.cssText =
-      'position:absolute;left:14px;top:14px;right:14px;bottom:14px;background:#ffffff;' +
-      'border-radius:10px;border:1px solid #e4e4e0;overflow:hidden;' +
-      'box-shadow:0 1px 2px rgba(20,20,15,0.06),0 10px 28px rgba(20,20,15,0.08);';
-
-    const accent = document.createElement('div');
-    accent.style.cssText = `position:absolute;left:0;top:0;bottom:0;width:6px;background:${k.accent};`;
-
-    const badge = document.createElement('div');
-    badge.textContent = k.label;
-    badge.style.cssText =
-      `position:absolute;top:12px;right:12px;z-index:2;font-size:11px;font-weight:700;` +
-      `letter-spacing:0.06em;color:${k.ink};background:${k.soft};border-radius:6px;padding:3px 7px;`;
-
-    const tpage = document.createElement('div');
-    tpage.style.cssText =
-      `position:absolute;left:${INNER.x - 14}px;top:${INNER.y - 14}px;width:${PAGE_W}px;` +
-      `padding:36px 40px;background:#ffffff;color:#1d1d1f;font-size:15px;line-height:1.55;` +
-      `transform:scale(${scale});transform-origin:top left;height:${INNER.h / scale}px;overflow:hidden;`;
-    tpage.innerHTML = pageHtml;
-
-    frame.appendChild(accent);
-    frame.appendChild(badge);
-    frame.appendChild(tpage);
-    card.appendChild(frame);
-    return card;
   }
 
   function shrinkDataUrl(dataUrl, maxW) {
@@ -287,22 +168,35 @@
     });
   }
 
+  /* Wrapping the card in a <foreignObject> and drawing it to a canvas taints
+     the canvas, so toDataURL throws and every document thumbnail came back
+     null. Main paints this document in a window and captures it instead; the
+     sheet and PDF thumbnails are plain SVG and still go through svgToPng. */
+  function thumbDocument(kind, pageHtml) {
+    const k = KINDS[kind] || KINDS.md;
+    return (
+      '<!doctype html><meta charset="utf-8"><style>' +
+      'html,body{margin:0;padding:0}' +
+      thumbCss(kind) +
+      '</style><body>' +
+      `<div class="card" style="position:relative">` +
+      '<div class="frame">' +
+      '<div class="accent"></div>' +
+      `<div class="badge">${k.label}</div>` +
+      `<div class="tpage">${pageHtml}</div>` +
+      '</div></div>'
+    );
+  }
+
   async function rasterizeHtmlThumb(kind, html) {
-    const host = document.createElement('div');
-    host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;contain:strict;';
-    const card = buildThumbCardElement(kind, html);
-    host.appendChild(card);
-    document.body.appendChild(host);
-    void card.offsetHeight;
     try {
-      const inner = serializeElementTree(card);
-      const svg =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
-        `<foreignObject width="100%" height="100%">${inner}</foreignObject></svg>`;
-      return await svgToPng(svg);
-    } finally {
-      host.remove();
-    }
+      const res = await window.margo.renderHtmlThumb({
+        html: thumbDocument(kind, html),
+        width: W,
+        height: H
+      });
+      return res && res.ok && res.dataUrl ? res.dataUrl : null;
+    } catch { return null; }
   }
 
   function ensurePng(dataUrl) {

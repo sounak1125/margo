@@ -105,7 +105,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: true
+      spellcheck: true,
+      /* Chromium throttles timers hard in a window it considers occluded, so an
+         unattended smoke run whose window drifts behind another one stalls in
+         its own waits and never reports. Real runs keep the throttling. */
+      backgroundThrottling: !SMOKE
     }
   });
   if (process.platform === 'win32') win.setIcon(icon);
@@ -153,7 +157,9 @@ function createWindow() {
     closeAcked = false;
     win.webContents.send('app:close-request');
   });
-  win.on('closed', () => { win = null; });
+  /* The thumbnail window is hidden but still a window, so leaving it open would
+     hold window-all-closed back and keep Margo running with no UI. */
+  win.on('closed', () => { win = null; closeThumbWindow(); });
 
   /* A dead renderer cannot answer app:close-request, and its unsaved work died
      with it, so stop vetoing the close. */
@@ -303,6 +309,65 @@ function thumbFile(filePath) {
   const h = crypto.createHash('sha1').update(String(filePath).toLowerCase()).digest('hex');
   return path.join(thumbsDir(), h + '.png');
 }
+
+/* Chromium taints a canvas the moment an SVG carrying a <foreignObject> is
+   drawn into it, so the renderer cannot rasterize an HTML thumbnail itself:
+   toDataURL throws and the thumbnail comes back null. Plain SVG is unaffected,
+   which is why the sheet and PDF thumbnails were fine and only the document
+   ones were missing. Painting the card in a window and capturing it avoids the
+   canvas altogether. The window is reused because a freshly created one fails
+   to load the next document, and javascript stays off - this is sanitized
+   document HTML that only has to lay out. */
+let thumbWin = null;
+let thumbSeq = 0;
+
+function thumbWindow(width, height) {
+  if (thumbWin && !thumbWin.isDestroyed()) {
+    thumbWin.setContentSize(width, height);
+    return thumbWin;
+  }
+  thumbWin = new BrowserWindow({
+    width,
+    height,
+    show: false,
+    frame: false,
+    webPreferences: {
+      sandbox: true,
+      javascript: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  thumbWin.on('closed', () => { thumbWin = null; });
+  return thumbWin;
+}
+
+function closeThumbWindow() {
+  if (thumbWin && !thumbWin.isDestroyed()) thumbWin.destroy();
+  thumbWin = null;
+}
+
+ipcMain.handle('thumbs:render-html', async (_e, req) => {
+  const width = Math.max(1, Math.round((req && req.width) || 440));
+  const height = Math.max(1, Math.round((req && req.height) || 568));
+  const tmp = path.join(app.getPath('temp'), `margo-thumb-${process.pid}-${thumbSeq++}.html`);
+  try {
+    await fs.promises.writeFile(tmp, String((req && req.html) || ''), 'utf8');
+    const w = thumbWindow(width, height);
+    await w.loadFile(tmp);
+    let img = await w.capturePage();
+    if (img.isEmpty()) return { ok: false, error: 'Thumbnail came back blank' };
+    /* capturePage hands back physical pixels, so on a scaled display the image
+       would be larger than the card the caller asked for. */
+    const size = img.getSize();
+    if (size.width !== width || size.height !== height) img = img.resize({ width, height });
+    return { ok: true, dataUrl: img.toDataURL() };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  } finally {
+    try { await fs.promises.unlink(tmp); } catch {}
+  }
+});
 
 ipcMain.handle('thumbs:set', (_e, { path: filePath, dataUrl }) => {
   try {
