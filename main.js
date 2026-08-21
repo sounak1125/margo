@@ -30,6 +30,17 @@ const THEMES = {
   ink: { bg: '#141820', fg: '#e8ecf2', bar: '#181c24' }
 };
 
+/* Every permission used to be granted on request, which handed anything that
+   ever got a foothold in the renderer a camera, a microphone and the author's
+   location for the asking. Margo itself only needs two: the installed font list
+   the font picker reads, and the clipboard the editors copy and paste through.
+   Anything not named here is refused. */
+const ALLOWED_PERMISSIONS = new Set([
+  'local-fonts',
+  'clipboard-read',
+  'clipboard-sanitized-write'
+]);
+
 let win = null;
 let forceClose = false;
 let pendingOpenPath = null;
@@ -168,11 +179,10 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(true);
+    callback(ALLOWED_PERMISSIONS.has(permission));
   });
   win.webContents.session.setPermissionCheckHandler((_wc, permission) => {
-    if (permission === 'local-fonts') return true;
-    return true;
+    return ALLOWED_PERMISSIONS.has(permission);
   });
 
   if (DEBUG) {
@@ -392,11 +402,34 @@ ipcMain.handle('file:read-binary', async (_e, filePath) => {
   return fs.promises.readFile(filePath);
 });
 
+/* Callers pass a display name like "doc-image-3.png" whatever the image really
+   is, so the extension is taken from the data URL instead: an image lifted out
+   of a Word file is as likely to be a JPEG, and it used to be written as .png. */
+function imageExt(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m === 'jpeg' || m === 'jpg') return 'jpg';
+  if (m === 'svg+xml') return 'svg';
+  return m.replace(/[^a-z0-9]/g, '') || 'png';
+}
+
+/* The renderer chooses these names, so one is a suggestion and never a path.
+   Only the stem survives, stripped of separators, drive letters and leading
+   dots, which keeps a crafted name from writing outside the chosen folder. */
+function safeImageName(suggested, fallbackStem, mime) {
+  const stem = path
+    .basename(String(suggested || ''))
+    .replace(/\.[^.]*$/, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/^\.+/, '')
+    .trim();
+  return (stem || fallbackStem) + '.' + imageExt(mime);
+}
+
 ipcMain.handle('image:save-as', async (_e, { dataUrl, suggestedName }) => {
   const m = /^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/.exec(dataUrl || '');
   if (!m) return { ok: false, error: 'Bad image data' };
-  const ext = m[1] === 'jpeg' ? 'jpg' : (m[1] === 'svg+xml' ? 'svg' : m[1]);
-  const defaultFile = suggestedName || `image.${ext}`;
+  const ext = imageExt(m[1]);
+  const defaultFile = safeImageName(suggestedName, 'image', m[1]);
   const res = await dialog.showSaveDialog(win, {
     title: 'Save image',
     defaultPath: path.join(app.getPath('pictures'), defaultFile),
@@ -423,9 +456,10 @@ ipcMain.handle('images:export-folder', async (_e, { images }) => {
     const im = images[i];
     const m = /^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/.exec(im.dataUrl || '');
     if (!m) continue;
-    const ext = m[1] === 'jpeg' ? 'jpg' : (m[1] === 'svg+xml' ? 'svg' : m[1]);
-    const filename = im.name || `doc-image-${i + 1}.${ext}`;
-    const filePath = path.join(targetDir, filename);
+    const filePath = path.join(targetDir, safeImageName(im.name, `doc-image-${i + 1}`, m[1]));
+    /* safeImageName leaves nothing that could climb out, so this only ever
+       fires if that changes. Skipping beats writing outside the folder. */
+    if (path.dirname(path.resolve(filePath)) !== path.resolve(targetDir)) continue;
     await fs.promises.writeFile(filePath, Buffer.from(m[2], 'base64'));
     saved++;
   }

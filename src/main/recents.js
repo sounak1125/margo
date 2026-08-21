@@ -8,10 +8,15 @@ function storePath() {
   return path.join(app.getPath('userData'), 'recents.json');
 }
 
+/* Entries without a usable path are dropped here rather than downstream: add()
+   and remove() lower-case r.path while filtering, so a single malformed entry
+   used to throw out of the file:open handler and report a document that had
+   opened perfectly well as having failed to open. */
 function readAll() {
   try {
     const arr = JSON.parse(fs.readFileSync(storePath(), 'utf8'));
-    return Array.isArray(arr) ? arr : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((r) => r && typeof r.path === 'string' && r.path);
   } catch {
     return [];
   }
