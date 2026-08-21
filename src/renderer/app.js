@@ -2179,14 +2179,51 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushAllDrafts();
   });
+  /* The main process vetoes every close and waits on this handler, so anything
+     that throws in here used to strand the window open for good: the title bar
+     X would silently do nothing and the app could only be killed from Task
+     Manager. Each step is isolated so one failure cannot swallow the close,
+     and a tab whose dirty state cannot be resolved asks the author what to do
+     rather than guessing - closing anyway would throw away their work, and
+     staying open forever is the bug being fixed. */
+  async function confirmCloseAfterError(tab) {
+    const name = (tab && tab.doc && tab.doc.name) || (state.doc && state.doc.name) || 'this document';
+    const body = document.createElement('div');
+    body.innerHTML =
+      `<div class="modal-lead">Margo could not check <strong>${escapeHtml(name)}</strong> for unsaved changes.</div>` +
+      `<div class="modal-detail">Closing now may lose changes that were never written to disk.</div>`;
+    const choice = await openModal('Close anyway?', body, [
+      { label: 'Keep Margo open', value: 'cancel' },
+      { label: 'Close anyway', primary: true, value: 'close' }
+    ]);
+    return choice === 'close';
+  }
+
   window.margo.onCloseRequest(async () => {
-    syncActiveTab();
-    await flushAllDrafts();
-    for (const t of [...state.tabs]) {
-      if (!t.dirty) continue;
-      await activateTab(t.id);
-      if (!(await resolveDirty())) return;
-      t.dirty = state.dirty;
+    try {
+      try { window.margo.closeAck(true); } catch (err) { console.error('close: ack failed', err); }
+      try { syncActiveTab(); } catch (err) { console.error('close: syncActiveTab failed', err); }
+      try { await flushAllDrafts(); } catch (err) { console.error('close: flushAllDrafts failed', err); }
+
+      for (const t of [...state.tabs]) {
+        if (!t.dirty) continue;
+        try {
+          await activateTab(t.id);
+          if (!(await resolveDirty())) return;
+          t.dirty = state.dirty;
+        } catch (err) {
+          console.error('close: could not resolve unsaved changes', err);
+          if (!(await confirmCloseAfterError(t))) return;
+        }
+      }
+    } catch (err) {
+      /* The prompt itself is broken, so there is no way left to ask here. Hand
+         the decision back to main, which can still offer a native dialog this
+         renderer cannot block, and leave the work intact until the author
+         answers it. */
+      console.error('close: handler failed', err);
+      try { window.margo.closeAck(false); } catch {}
+      return;
     }
     window.margo.closeNow();
   });

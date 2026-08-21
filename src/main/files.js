@@ -553,18 +553,46 @@ function suggestSavePath(req, documentsDir) {
   return path.join(dir, base + defExt);
 }
 
+/* Writing straight over the target truncates it first, so a write that dies
+   half way - full disk, removable drive pulled, antivirus lock, power cut -
+   leaves the author holding a truncated file where their document used to be.
+   Every save goes to a sibling temp file and is renamed into place instead:
+   rename is atomic, so the target is either the old document or the new one,
+   never a half-written one. The temp file is a sibling so the rename stays on
+   one volume; across volumes it would degrade to a copy and lose atomicity.
+   If the target is locked the rename throws and the original survives, which
+   is what the caller reports to the author. */
+let tmpCounter = 0;
+async function atomicWrite(target, write) {
+  const dir = path.dirname(target);
+  const tmp = path.join(
+    dir,
+    '.' + path.basename(target) + '.margo-' + process.pid + '-' + (tmpCounter++) + '.tmp'
+  );
+  try {
+    await write(tmp);
+    await fsp.rename(tmp, target);
+  } catch (err) {
+    try { await fsp.unlink(tmp); } catch {}
+    throw err;
+  }
+}
+
 async function save({ kind, path: target, data, thumbDataUrl }) {
   const ext = path.extname(target).toLowerCase();
 
   if (kind === 'md') {
     const md = data.markdown ?? '';
-    if (MD_EXTS.includes(ext)) return fsp.writeFile(target, md, 'utf8');
+    if (MD_EXTS.includes(ext)) return atomicWrite(target, (tmp) => fsp.writeFile(tmp, md, 'utf8'));
     if (ext === '.docx') {
       let buf = await htmlToDocxBuffer(marked.parse(md), titleOf(target));
       buf = await maybeEmbedDocxThumb(buf, thumbDataUrl);
-      return fsp.writeFile(target, buf);
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
-    if (ext === '.html') return fsp.writeFile(target, htmlDocument(marked.parse(md), titleOf(target)), 'utf8');
+    if (ext === '.html') {
+      const html = htmlDocument(marked.parse(md), titleOf(target));
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, html, 'utf8'));
+    }
     throw new Error(`Can't save markdown as ${ext}`);
   }
 
@@ -575,10 +603,16 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
       buf = await maybeEmbedDocxThumb(buf, thumbDataUrl);
       buf = await maybeEmbedDocxNotes(buf, data.notes);
       buf = await maybeEmbedDocxLayout(buf, data.layout);
-      return fsp.writeFile(target, buf);
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
-    if (MD_EXTS.includes(ext)) return fsp.writeFile(target, turndown.turndown(html), 'utf8');
-    if (ext === '.html') return fsp.writeFile(target, htmlDocument(html, titleOf(target), data.layout), 'utf8');
+    if (MD_EXTS.includes(ext)) {
+      const md = turndown.turndown(html);
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, md, 'utf8'));
+    }
+    if (ext === '.html') {
+      const out = htmlDocument(html, titleOf(target), data.layout);
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, out, 'utf8'));
+    }
     throw new Error(`Can't save document as ${ext}`);
   }
 
@@ -586,18 +620,21 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
     const sheets = data.sheets && data.sheets.length ? data.sheets : [{ name: 'Sheet1', rows: [] }];
     if (ext === '.xlsx') {
       const wb = modelToWorkbook(sheets);
-      return wb.xlsx.writeFile(target);
+      return atomicWrite(target, (tmp) => wb.xlsx.writeFile(tmp));
     }
     if (ext === '.csv') {
       const idx = Math.min(Math.max(data.active || 0, 0), sheets.length - 1);
       const wb = modelToWorkbook([sheets[idx]]);
-      return wb.csv.writeFile(target);
+      return atomicWrite(target, (tmp) => wb.csv.writeFile(tmp));
     }
     throw new Error(`Can't save spreadsheet as ${ext}`);
   }
 
   if (kind === 'pdf') {
-    if (ext === '.pdf') return fsp.writeFile(target, Buffer.from(data.base64, 'base64'));
+    if (ext === '.pdf') {
+      const buf = Buffer.from(data.base64, 'base64');
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
+    }
     throw new Error(`Can't save PDF as ${ext}`);
   }
 
@@ -1184,6 +1221,7 @@ module.exports = {
   kindFromPath,
   openPath,
   save,
+  atomicWrite,
   saveFilters,
   suggestSavePath,
   htmlToDocxBuffer,

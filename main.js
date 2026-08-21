@@ -33,6 +33,10 @@ const THEMES = {
 let win = null;
 let forceClose = false;
 let pendingOpenPath = null;
+let closeAskedAt = 0;
+let closeAcked = false;
+let closeStuck = false;
+const CLOSE_ACK_GRACE_MS = 10000;
 
 const updater = require('./src/main/updater').attach({
   getWindow: () => win,
@@ -109,12 +113,51 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'src', 'renderer', 'index.html'));
 
+  /* Closing is vetoed here and handed to the renderer so it can offer to save.
+     That leaves the window at the renderer's mercy, so there are two ways out
+     if the renderer never answers. A renderer that is gone has no unsaved work
+     left to rescue, so the close simply proceeds. A renderer that is merely
+     wedged still might, so the second attempt asks in a native dialog - one
+     the stuck renderer cannot draw over or block - instead of deciding for the
+     author. The ack keeps that dialog away from the normal path, where the
+     renderer is alive and showing its own "Save changes?" prompt; a renderer
+     that acks and then fails outright reports that too, so it reaches the same
+     dialog without waiting out the grace period. */
   win.on('close', (e) => {
     if (forceClose) return;
+    if (!win || win.webContents.isDestroyed()) return;
     e.preventDefault();
-    if (win && !win.webContents.isDestroyed()) win.webContents.send('app:close-request');
+
+    const unanswered = closeAskedAt && !closeAcked && Date.now() - closeAskedAt > CLOSE_ACK_GRACE_MS;
+    if (closeStuck || unanswered) {
+      const choice = dialog.showMessageBoxSync(win, {
+        type: 'warning',
+        buttons: ['Close anyway', 'Keep Margo open'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Margo will not close',
+        message: 'Margo could not finish closing.',
+        detail: 'It could not check your documents for unsaved changes. Closing now will lose anything that was never saved to disk.'
+      });
+      if (choice === 0) {
+        forceClose = true;
+        win.close();
+      } else {
+        closeAskedAt = 0;
+        closeStuck = false;
+      }
+      return;
+    }
+
+    closeAskedAt = Date.now();
+    closeAcked = false;
+    win.webContents.send('app:close-request');
   });
   win.on('closed', () => { win = null; });
+
+  /* A dead renderer cannot answer app:close-request, and its unsaved work died
+     with it, so stop vetoing the close. */
+  win.webContents.on('render-process-gone', () => { forceClose = true; });
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -380,7 +423,7 @@ ipcMain.handle('export:pdf', async (_e, req) => {
     }
     await withHtmlPrintWindow(pdfExportHtml(req), async (printWin) => {
       const pdf = await printWin.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
-      fs.writeFileSync(target, pdf);
+      await files.atomicWrite(target, (tmp) => fs.promises.writeFile(tmp, pdf));
     });
     recents.add(target, 'pdf');
     return { ok: true, path: target };
@@ -462,6 +505,15 @@ ipcMain.handle('settings:first-run', () => {
 ipcMain.handle('app:sample-path', () => path.join(__dirname, 'samples', 'welcome.md'));
 
 ipcMain.handle('win:title', (_e, title) => { if (win) win.setTitle(title); });
+
+/* Sent the moment the renderer picks up app:close-request, before it does any
+   work, so a slow "Save changes?" prompt is never mistaken for a hang. Sent
+   again with false if the renderer then fails to see the close through, which
+   is the one case an ack would otherwise hide from the escape hatch above. */
+ipcMain.handle('app:close-ack', (_e, handled) => {
+  if (handled === false) closeStuck = true;
+  else closeAcked = true;
+});
 
 ipcMain.handle('app:close-now', () => {
   forceClose = true;

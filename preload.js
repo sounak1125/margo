@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('margo', {
   isSmoke: () => process.env.MARGO_SMOKE === '1',
 
   setTitle: (t) => ipcRenderer.invoke('win:title', t),
+  closeAck: (handled) => ipcRenderer.invoke('app:close-ack', handled),
   closeNow: () => ipcRenderer.invoke('app:close-now'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
