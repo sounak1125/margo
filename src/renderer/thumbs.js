@@ -289,7 +289,7 @@
 
   async function rasterizeHtmlThumb(kind, html) {
     const host = document.createElement('div');
-    host.style.cssText = 'position:fixed;left:-12000px;top:0;opacity:0;pointer-events:none;overflow:hidden;';
+    host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;contain:strict;';
     const card = buildThumbCardElement(kind, html);
     host.appendChild(card);
     document.body.appendChild(host);

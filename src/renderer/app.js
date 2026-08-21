@@ -851,7 +851,7 @@
     if (!state.doc?.path || state.doc.kind === 'md') return;
     try {
       const url = await window.MargoThumbs.generate(state.doc, data);
-      if (url) loadRecents();
+      if (url) applyThumbToLibrary(state.doc.path, url);
     } catch {}
   }
   function scheduleThumb() {
@@ -1072,21 +1072,72 @@
     const kind = EXT_ICON[ext];
     return kind ? `kind-${kind}` : '';
   }
-  function fillRecentThumb(thumb, r) {
-    if (recentWantsContentThumb(r) && r.thumb) {
-      const img = document.createElement('img');
-      img.src = r.thumb;
+
+  const thumbBlobUrls = new Map();
+  function bytesToThumbBlob(payload) {
+    if (!payload) return null;
+    if (typeof payload === 'string') {
+      if (payload.startsWith('blob:')) return null;
+      const m = /^data:([^;]+);base64,(.+)$/i.exec(payload);
+      if (!m) return null;
+      const bin = atob(m[2]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: m[1] || 'image/png' });
+    }
+    if (payload instanceof Blob) return payload;
+    if (payload instanceof ArrayBuffer) return new Blob([payload], { type: 'image/png' });
+    if (ArrayBuffer.isView(payload)) return new Blob([payload], { type: 'image/png' });
+    if (payload.type === 'Buffer' && Array.isArray(payload.data)) {
+      return new Blob([new Uint8Array(payload.data)], { type: 'image/png' });
+    }
+    return null;
+  }
+  function cacheThumbUrl(filePath, payload) {
+    const key = String(filePath).toLowerCase();
+    const blob = bytesToThumbBlob(payload);
+    if (!blob) return thumbBlobUrls.get(key) || null;
+    const prev = thumbBlobUrls.get(key);
+    if (prev) URL.revokeObjectURL(prev);
+    const url = URL.createObjectURL(blob);
+    thumbBlobUrls.set(key, url);
+    return url;
+  }
+  function paintCoverImage(cover, src, isTypeIcon) {
+    cover.classList.toggle('recent-thumb-type', !!isTypeIcon);
+    cover.classList.toggle('home-tile-cover-type', !!(isTypeIcon && cover.classList.contains('home-tile-cover')));
+    let img = cover.querySelector('img');
+    const glyph = cover.querySelector('.thumb-glyph');
+    if (glyph) glyph.remove();
+    if (!img) {
+      img = document.createElement('img');
       img.alt = '';
-      thumb.appendChild(img);
+      img.decoding = 'async';
+      cover.insertBefore(img, cover.firstChild);
+    }
+    if (img.src !== src) img.src = src;
+  }
+  function applyThumbToLibrary(filePath, payload) {
+    const src = cacheThumbUrl(filePath, payload);
+    if (!src) return;
+    const key = String(filePath).toLowerCase();
+    document.querySelectorAll('.home-tile, .recent-card').forEach((el) => {
+      if (el.dataset.path !== key) return;
+      const cover = el.querySelector('.home-tile-cover, .recent-thumb');
+      if (cover) paintCoverImage(cover, src, false);
+    });
+  }
+  function fillRecentThumb(thumb, r) {
+    const cached = recentWantsContentThumb(r)
+      ? (thumbBlobUrls.get(r.path.toLowerCase()) || (r.thumb ? cacheThumbUrl(r.path, r.thumb) : null))
+      : null;
+    if (cached) {
+      paintCoverImage(thumb, cached, false);
       return;
     }
     const kind = EXT_ICON[r.ext];
     if (kind) {
-      const img = document.createElement('img');
-      img.src = `../../assets/file-icons/${kind}.png`;
-      img.alt = EXT_STYLE[r.ext] || '';
-      thumb.classList.add('recent-thumb-type');
-      thumb.appendChild(img);
+      paintCoverImage(thumb, `../../assets/file-icons/${kind}.png`, true);
       return;
     }
     const g = document.createElement('span');
@@ -1169,10 +1220,6 @@
       const cover = document.createElement('div');
       cover.className = 'home-tile-cover';
       fillRecentThumb(cover, r);
-      if (cover.classList.contains('recent-thumb-type')) {
-        cover.classList.remove('recent-thumb-type');
-        cover.classList.add('home-tile-cover-type');
-      }
 
       const badge = document.createElement('span');
       badge.className = 'home-tile-badge ' + kindBadgeClass(r.ext);
@@ -1209,10 +1256,28 @@
   const thumbBackfillQueue = [];
   const thumbBackfillSeen = new Set();
   let thumbBackfillRunning = false;
+  let homeScrolling = false;
+  let homeScrollIdleTimer = null;
+
+  function waitMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  function waitForIdle() {
+    return new Promise((resolve) => {
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(() => resolve(), { timeout: 500 });
+      } else {
+        setTimeout(resolve, 48);
+      }
+    });
+  }
+  async function waitWhileHomeScrolling() {
+    while (homeScrolling) await waitMs(80);
+  }
 
   function queueThumbBackfill(list) {
     for (const r of list) {
-      if (!recentWantsContentThumb(r) || r.thumb) continue;
+      if (!recentWantsContentThumb(r) || r.thumb || thumbBlobUrls.has(r.path.toLowerCase())) continue;
       if (thumbBackfillSeen.has(r.path) || thumbBackfillQueue.includes(r.path)) continue;
       thumbBackfillQueue.push(r.path);
     }
@@ -1222,24 +1287,47 @@
   async function runThumbBackfill() {
     if (thumbBackfillRunning) return;
     thumbBackfillRunning = true;
+    await waitMs(280);
     while (thumbBackfillQueue.length) {
+      await waitWhileHomeScrolling();
+      await waitForIdle();
       const p = thumbBackfillQueue.shift();
       try {
+        if (state.view === 'home') {
+          const ext = String(p).split('.').pop().toLowerCase();
+          if (ext === 'docx' && window.margo.readDocxThumb) {
+            const emb = await window.margo.readDocxThumb(p);
+            if (emb && emb.ok && emb.dataUrl) {
+              thumbBackfillSeen.add(p);
+              applyThumbToLibrary(p, emb.dataUrl);
+            }
+          }
+          continue;
+        }
         const res = await window.margo.peekPath(p);
         if (!res.ok || !res.doc) continue;
+        await waitWhileHomeScrolling();
+        if (state.view === 'home' || homeScrolling) {
+          thumbBackfillQueue.push(p);
+          continue;
+        }
         const url = await window.MargoThumbs.generate(res.doc, res.doc);
         if (url) {
           thumbBackfillSeen.add(p);
-          const list = await window.margo.recents.list();
-          lastRecents = list;
-          renderSidebarRecents(list);
-          renderHomeTiles(list);
-          markActiveRecent();
+          applyThumbToLibrary(p, url);
         }
       } catch {}
     }
     thumbBackfillRunning = false;
     if (thumbBackfillQueue.length) runThumbBackfill();
+  }
+
+  if (els.home) {
+    els.home.addEventListener('scroll', () => {
+      homeScrolling = true;
+      clearTimeout(homeScrollIdleTimer);
+      homeScrollIdleTimer = setTimeout(() => { homeScrolling = false; }, 180);
+    }, { passive: true });
   }
 
   /* ---------------- sliding sidebar ---------------- */

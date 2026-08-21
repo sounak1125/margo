@@ -426,7 +426,7 @@ ipcMain.handle('recents:list', () => {
     let thumb = null;
     try {
       const f = thumbFile(r.path);
-      if (fs.existsSync(f)) thumb = 'data:image/png;base64,' + fs.readFileSync(f).toString('base64');
+      if (fs.existsSync(f)) thumb = fs.readFileSync(f);
     } catch {}
     return { ...r, thumb };
   });

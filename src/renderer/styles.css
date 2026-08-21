@@ -542,6 +542,9 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
 }
 .home-hub {
   width: min(980px, 100%);
@@ -603,6 +606,7 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 20px 16px;
   align-items: start;
+  contain: layout;
 }
 .home-tiles-empty {
   grid-column: 1 / -1;
@@ -615,10 +619,10 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   padding: 10px 10px 12px;
   text-align: left; border-radius: var(--radius);
   border: 1px solid transparent; background: transparent;
-  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  contain: layout paint;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 .home-tile:hover {
-  transform: translateY(-3px);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--surface);
   box-shadow: var(--shadow-md);
@@ -634,10 +638,12 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   overflow: hidden;
   box-shadow: var(--shadow-sm);
   flex: none;
+  contain: layout paint;
 }
 .home-tile-cover img {
   width: 100%; height: 100%;
   object-fit: cover; object-position: top; display: block;
+  pointer-events: none;
 }
 .home-tile-cover.home-tile-cover-type img {
   object-fit: contain; object-position: center; padding: 12%;
