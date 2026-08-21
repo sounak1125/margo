@@ -1,3 +1,4 @@
 src/main/google-oauth.json
 node_modules/
 dist/
+.cursor/
