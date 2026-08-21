@@ -43,6 +43,23 @@ function pkce() {
   return { verifier, challenge };
 }
 
+/* The loopback server answers on a port any local program can find, so without
+   this it would exchange whatever code arrived first. PKCE does not close that
+   hole: it stops someone stealing our code, not someone feeding us theirs, and
+   a code from the attacker's account would bind Margo to their Drive and push
+   the author's documents there. RFC 8252 s8.9 asks for exactly this. */
+function newState() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function stateMatches(expected, got) {
+  if (typeof got !== 'string' || got.length !== expected.length) return false;
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(got, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 function tokenFile(userData) {
   return path.join(userData, 'google-auth.bin');
 }
@@ -126,6 +143,7 @@ async function pictureDataUrl(url) {
 
 async function signInWithBrowser(cfg) {
   const { verifier, challenge } = pkce();
+  const state = newState();
   let client = null;
   let finishing = false;
   let settle;
@@ -161,6 +179,13 @@ async function signInWithBrowser(cfg) {
         if (!code && !err) {
           res.writeHead(204);
           res.end();
+          return;
+        }
+        /* Anything not carrying our own state is not the redirect we sent the
+           author to. Answer it blandly and keep waiting for the real one, so a
+           stray or planted request cannot finish or cancel this sign-in. */
+        if (!stateMatches(state, u.searchParams.get('state'))) {
+          sendPage(res, 'This sign-in link did not come from Margo. You can close this window.');
           return;
         }
         if (err) {
@@ -214,6 +239,7 @@ async function signInWithBrowser(cfg) {
     access_type: 'offline',
     prompt: 'consent',
     scope: SCOPES,
+    state,
     code_challenge: challenge,
     code_challenge_method: 'S256'
   });
