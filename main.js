@@ -23,10 +23,10 @@ if (process.platform === 'win32') {
 }
 
 const THEMES = {
-  light: { bg: '#ffffff', fg: '#1d1d1f', bar: '#f7f7f5' },
-  dark: { bg: '#171719', fg: '#ededef', bar: '#1c1c1f' },
+  light: { bg: '#fafafa', fg: '#19191b', bar: '#f4f4f3' },
+  dark: { bg: '#161618', fg: '#ededef', bar: '#1b1b1e' },
   paper: { bg: '#f4efe6', fg: '#2a241c', bar: '#ebe4d8' },
-  graphite: { bg: '#232326', fg: '#e8e8ea', bar: '#2a2a2e' },
+  graphite: { bg: '#222225', fg: '#e8e8ea', bar: '#27272b' },
   ink: { bg: '#141820', fg: '#e8ecf2', bar: '#181c24' }
 };
 
@@ -48,6 +48,7 @@ let closeAskedAt = 0;
 let closeAcked = false;
 let closeStuck = false;
 const CLOSE_ACK_GRACE_MS = 10000;
+const SHOW_FALLBACK_MS = 3000;
 
 const updater = require('./src/main/updater').attach({
   getWindow: () => win,
@@ -124,7 +125,21 @@ function createWindow() {
     }
   });
   if (process.platform === 'win32') win.setIcon(icon);
-  win.show();
+  /* Holding the window back until ready-to-show means the first thing on
+     screen is the finished landing view rather than a white flash. A renderer
+     that throws before its first paint never fires that event, which would
+     leave Margo running with no window and nothing on screen to say so, so the
+     wait is capped and the window comes up regardless once it expires. */
+  let shown = false;
+  const showWindow = () => {
+    if (shown || !win || win.isDestroyed()) return;
+    shown = true;
+    clearTimeout(showFallback);
+    win.show();
+    win.focus();
+  };
+  const showFallback = setTimeout(showWindow, SHOW_FALLBACK_MS);
+  win.once('ready-to-show', showWindow);
 
   win.loadFile(path.join(__dirname, 'src', 'renderer', 'index.html'));
 
@@ -170,7 +185,7 @@ function createWindow() {
   });
   /* The thumbnail window is hidden but still a window, so leaving it open would
      hold window-all-closed back and keep Margo running with no UI. */
-  win.on('closed', () => { win = null; closeThumbWindow(); });
+  win.on('closed', () => { clearTimeout(showFallback); win = null; closeThumbWindow(); });
 
   /* A dead renderer cannot answer app:close-request, and its unsaved work died
      with it, so stop vetoing the close. */

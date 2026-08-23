@@ -5,13 +5,13 @@
       id: 'light',
       label: 'Light',
       scheme: 'light',
-      chrome: { bg: '#ffffff', fg: '#1d1d1f', bar: '#f7f7f5' }
+      chrome: { bg: '#fafafa', fg: '#19191b', bar: '#f4f4f3' }
     },
     {
       id: 'dark',
       label: 'Dark',
       scheme: 'dark',
-      chrome: { bg: '#171719', fg: '#ededef', bar: '#1c1c1f' }
+      chrome: { bg: '#161618', fg: '#ededef', bar: '#1b1b1e' }
     },
     {
       id: 'paper',
@@ -23,7 +23,7 @@
       id: 'graphite',
       label: 'Graphite',
       scheme: 'dark',
-      chrome: { bg: '#232326', fg: '#e8e8ea', bar: '#2a2a2e' }
+      chrome: { bg: '#222225', fg: '#e8e8ea', bar: '#27272b' }
     },
     {
       id: 'ink',
