@@ -28,6 +28,9 @@
     filePdf: S('<path d="M3.5 2h6L13 5.5V14h-9.5z"/><path d="M5.5 8.5c1.5 2.5 3 3.5 5 4-2.5.5-4 .5-5-.5 1-2 1.5-4.5 1.5-6 .5 2 2 4.5 3.5 5.5"/>'),
     pen: S('<path d="m9.5 3.5 3 3L6 13l-3.5.5L3 10z"/><path d="m8.5 4.5 3 3"/>'),
     image: S('<rect x="2" y="3" width="12" height="10" rx="1.8"/><circle cx="5.6" cy="6.4" r="1.1"/><path d="m3 11.5 3.2-3 2.3 2.2 2.5-2.7 2 2"/>'),
+    /* Listing the pictures already in the document is a different job from
+       placing one, so it gets a stack rather than a second single frame. */
+    imageStack: S('<rect x="5" y="2.5" width="8.5" height="8.5" rx="1.6"/><circle cx="7.9" cy="5.4" r="0.9"/><path d="m5.6 9.8 2.5-2.4 1.8 1.7 1.9-2.1 1.7 1.7"/><path d="M11 13.5H4a1.5 1.5 0 0 1-1.5-1.5V5.2"/>'),
     zoomIn: S('<circle cx="7" cy="7" r="4.5"/><path d="m13.5 13.5-3.2-3.2M7 5.2v3.6M5.2 7h3.6"/>'),
     zoomOut: S('<circle cx="7" cy="7" r="4.5"/><path d="m13.5 13.5-3.2-3.2M5.2 7h3.6"/>'),
     fit: S('<path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10"/>'),
@@ -37,6 +40,15 @@
     settings: S('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.4M8 13v1.4M1.6 8h1.4M13 8h1.4M3.7 3.7l1 1M11.3 11.3l1 1M12.3 3.7l-1 1M4.7 11.3l-1 1"/>'),
     note: S('<path d="M3.5 2.5h7.5L13.5 5.5V13.5H3.5z"/><path d="M11 2.5V5.5h2.5M5.5 8h5M5.5 10.5h3.5"/>'),
     bell: S('<path d="M8 2.5a3.2 3.2 0 0 1 3.2 3.2v2.1l1.3 2.2H3.5L4.8 7.8V5.7A3.2 3.2 0 0 1 8 2.5z"/><path d="M6.5 13a1.5 1.5 0 0 0 3 0"/>'),
+    /* A speech bubble reads as a remark on the text; the page-with-lines and
+       the bell that stood in for it read as a document and an alarm. */
+    comment: S('<path d="M13.5 9.5a1.8 1.8 0 0 1-1.8 1.8H6.2L3 13.5v-2.2H4.3a1.8 1.8 0 0 1-1.8-1.8v-5A1.8 1.8 0 0 1 4.3 2.7h7.4a1.8 1.8 0 0 1 1.8 1.8z"/><path d="M5.8 5.8h4.4M5.8 8h3"/>'),
+    /* The rail toggle sits next to Add comment, so it shows the panel it opens
+       rather than a second copy of the same bubble. */
+    commentsPanel: S('<rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M9.5 3v10"/><path d="M11 6.2h1.4M11 8.4h1"/>'),
+    cut: S('<circle cx="4.2" cy="11.8" r="1.7"/><circle cx="11.8" cy="11.8" r="1.7"/><path d="M5.4 10.6 11.5 2.5M10.6 10.6 4.5 2.5"/>'),
+    copy: S('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5V9A1.5 1.5 0 0 0 4 10.5h1.5"/>'),
+    paste: S('<path d="M5.5 3.5H4A1.5 1.5 0 0 0 2.5 5v8A1.5 1.5 0 0 0 4 14.5h8A1.5 1.5 0 0 0 13.5 13V5A1.5 1.5 0 0 0 12 3.5h-1.5"/><rect x="5.5" y="1.5" width="5" height="3" rx="1"/><path d="M5.8 8.5h4.4M5.8 11h3"/>'),
     search: S('<circle cx="7" cy="7" r="4.5"/><path d="m13.5 13.5-3.2-3.2"/>'),
     alignJustify: S('<path d="M2 3.5h12M2 7.5h12M2 11.5h12M2 14.5h12"/>'),
     subscript: S('<path d="m2.5 4 4 6M6.5 4l-4 6"/><path d="M10 11.5h3.5L10 14.5h3.5"/>'),
@@ -67,6 +79,10 @@
     valignBottom: S('<path d="M2 13h12M5 6.5h6M5 9.5h6"/>'),
     replace: S('<path d="M3 7V4a1 1 0 0 1 1-1h7M9 1.5l2.5 2L9 5.5M13 9v3a1 1 0 0 1-1 1H5M7 14.5l-2.5-2L7 10.5"/>'),
     headerFooter: S('<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 5.5h11M2.5 10.5h11" stroke-dasharray="1.5 1.5"/>'),
+    /* Header and footer sit next to each other, so each one fills in the band
+       it actually writes to rather than both showing the same page. */
+    header: S('<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 5.8h11" stroke-dasharray="1.5 1.5"/><path d="M4.4 4.2h7.2" stroke-width="2"/>'),
+    footer: S('<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10.2h11" stroke-dasharray="1.5 1.5"/><path d="M4.4 11.8h7.2" stroke-width="2"/>'),
     fx: S('<path d="M3 13V8.5a2 2 0 0 1 2-2h1M2 8.5h4M9.5 7.5l4 6M13.5 7.5l-4 6"/>'),
     autosum: S('<path d="M13 3.5H3.5l4.5 4.5-4.5 4.5H13"/>'),
     chartCol: S('<rect x="2" y="7.5" width="3" height="6.5" rx="0.5"/><rect x="6.5" y="4.5" width="3" height="9.5" rx="0.5"/><rect x="11" y="2.5" width="3" height="11.5" rx="0.5"/>'),

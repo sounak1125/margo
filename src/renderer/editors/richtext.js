@@ -158,10 +158,10 @@
       FONT_FAMILIES.map((f) => [f, [{ style: 'Regular', fullName: f }]])
     );
     let tableBtns = {};
-    let notes = [];
-    let notesRail = null;
-    let notesFab = null;
-    let notesBadge = null;
+    let comments = [];
+    let commentsRail = null;
+    let commentsFab = null;
+    let commentsBadge = null;
     let outlineRail = null;
     let findBar = null;
     let findInput = null;
@@ -243,9 +243,13 @@
         });
         joined = tmp.innerHTML;
       }
+      /* The stored field, the anchor attribute and the docx part all still say
+         "note". Renaming them would strip the comments off every document
+         Margo has already saved, and no reader ever sees them - so the rename
+         stops here, and this is the one seam where the two words meet. */
       return {
         html: joined,
-        notes: notes.map((n) => ({
+        notes: comments.map((n) => ({
           id: n.id,
           quote: n.quote,
           body: n.body,
@@ -268,7 +272,7 @@
     function restoreDoc(snap) {
       if (!pagesRoot || !snap) return;
       skipInputRecord = true;
-      notes = Array.isArray(snap.notes) ? snap.notes.map((n) => ({ ...n })) : [];
+      comments = Array.isArray(snap.notes) ? snap.notes.map((n) => ({ ...n })) : [];
       layout = {
         size: 'letter',
         orientation: 'portrait',
@@ -288,9 +292,9 @@
       activePage = pagesRoot.querySelector('.doc-page');
       applyLayoutAttributes();
       syncLayoutControls();
-      rehydrateNoteAnchors();
-      updateNotesBadge();
-      renderNotesRail();
+      rehydrateCommentAnchors();
+      updateCommentsBadge();
+      renderCommentsRail();
       updateStatus();
       refreshStates();
       skipInputRecord = false;
@@ -2072,6 +2076,12 @@
     }
 
     /* ---------- Image Insertion, Extraction & Callouts ---------- */
+    async function insertLinkFromDialog() {
+      saveSelection();
+      const url = await ctx.inputModal('Insert link', 'https://…', 'https://');
+      if (url) { restoreSelection(); exec('createLink', url); }
+    }
+
     function insertImageFromDialog() {
       const input = document.createElement('input');
       input.type = 'file';
@@ -2554,17 +2564,17 @@
       fillFontSelect(catalog.families);
     }
 
-    /* ---------- sticky notes ---------- */
-    function openNotesCount() {
-      return notes.filter((n) => !n.done).length;
+    /* ---------- sticky comments ---------- */
+    function openCommentsCount() {
+      return comments.filter((n) => !n.done).length;
     }
 
-    function updateNotesBadge() {
-      if (!notesBadge || !notesFab) return;
-      const n = openNotesCount();
-      notesBadge.textContent = String(n);
-      notesBadge.classList.toggle('hidden', n === 0);
-      notesFab.classList.toggle('has-notes', notes.length > 0);
+    function updateCommentsBadge() {
+      if (!commentsBadge || !commentsFab) return;
+      const n = openCommentsCount();
+      commentsBadge.textContent = String(n);
+      commentsBadge.classList.toggle('hidden', n === 0);
+      commentsFab.classList.toggle('has-comments', comments.length > 0);
     }
 
     function findAnchor(id) {
@@ -2601,9 +2611,22 @@
       return false;
     }
 
-    function rehydrateNoteAnchors() {
-      notes.forEach((note) => {
-        if (!findAnchor(note.id)) wrapFirstQuoteMatch(note.id, note.quote);
+    function rehydrateCommentAnchors() {
+      comments.forEach((comment) => {
+        if (!findAnchor(comment.id)) wrapFirstQuoteMatch(comment.id, comment.quote);
+      });
+      applyCommentAnchorStates();
+    }
+
+    /* A resolved comment should stop marking up the page. The state is read
+       back off the records rather than stored on the anchor, so a document
+       that arrives with its comments already resolved draws correctly on the
+       first paint instead of after the first tick. */
+    function applyCommentAnchorStates() {
+      if (!pagesRoot) return;
+      comments.forEach((comment) => {
+        const el = findAnchor(comment.id);
+        if (el) el.classList.toggle('is-resolved', !!comment.done);
       });
     }
 
@@ -2613,10 +2636,10 @@
       setTimeout(() => el.classList.remove('margo-note-flash'), 1200);
     }
 
-    function scrollToNote(id) {
+    function scrollToComment(id) {
       const el = findAnchor(id);
       if (!el) {
-        ctx.toast('Note anchor missing — text may have been deleted');
+        ctx.toast('Comment anchor missing — text may have been deleted');
         return false;
       }
       const page = el.closest('.doc-page');
@@ -2626,64 +2649,65 @@
       return true;
     }
 
-    function renderNotesRail() {
-      if (!notesRail) return;
-      const list = notesRail.querySelector('.doc-notes-list');
+    function renderCommentsRail() {
+      if (!commentsRail) return;
+      const list = commentsRail.querySelector('.doc-comments-list');
       list.innerHTML = '';
-      if (!notes.length) {
-        list.innerHTML = '<div class="doc-notes-empty">No notes yet. Select text and click Add note.</div>';
+      if (!comments.length) {
+        list.innerHTML = '<div class="doc-comments-empty">No comments yet. Select text and click Add comment.</div>';
         return;
       }
-      notes.forEach((note) => {
+      comments.forEach((comment) => {
         const card = document.createElement('div');
-        card.className = 'doc-note-card' + (note.done ? ' done' : '') + (!findAnchor(note.id) ? ' orphan' : '');
-        card.dataset.noteId = note.id;
-        const quote = (note.quote || '').slice(0, 80);
+        card.className = 'doc-comment-card' + (comment.done ? ' done' : '') + (!findAnchor(comment.id) ? ' orphan' : '');
+        card.dataset.commentId = comment.id;
+        const quote = (comment.quote || '').slice(0, 80);
         card.innerHTML =
-          `<div class="doc-note-quote">${escapeHtml(quote)}${quote.length >= 80 ? '…' : ''}</div>` +
-          `<div class="doc-note-body">${escapeHtml(note.body || '')}</div>` +
-          `<div class="doc-note-actions">` +
-            `<label class="doc-note-done"><input type="checkbox" ${note.done ? 'checked' : ''}> Done</label>` +
-            `<button type="button" class="doc-note-delete" title="Delete note">Delete</button>` +
+          `<div class="doc-comment-quote">${escapeHtml(quote)}${quote.length >= 80 ? '…' : ''}</div>` +
+          `<div class="doc-comment-body">${escapeHtml(comment.body || '')}</div>` +
+          `<div class="doc-comment-actions">` +
+            `<label class="doc-comment-done"><input type="checkbox" ${comment.done ? 'checked' : ''}> Done</label>` +
+            `<button type="button" class="doc-comment-delete" title="Delete comment">Delete</button>` +
           `</div>`;
         card.addEventListener('click', (e) => {
           if (e.target.closest('input') || e.target.closest('button') || e.target.closest('label')) return;
-          scrollToNote(note.id);
+          scrollToComment(comment.id);
         });
         card.querySelector('input').addEventListener('change', (e) => {
-          note.done = !!e.target.checked;
-          card.classList.toggle('done', note.done);
+          comment.done = !!e.target.checked;
+          card.classList.toggle('done', comment.done);
+          applyCommentAnchorStates();
           ctx.markDirty();
-          updateNotesBadge();
+          updateCommentsBadge();
           recordNow();
         });
-        card.querySelector('.doc-note-delete').addEventListener('click', (e) => {
+        card.querySelector('.doc-comment-delete').addEventListener('click', (e) => {
           e.stopPropagation();
-          const anchor = findAnchor(note.id);
+          const anchor = findAnchor(comment.id);
           if (anchor) {
             const parent = anchor.parentNode;
             while (anchor.firstChild) parent.insertBefore(anchor.firstChild, anchor);
             anchor.remove();
             parent.normalize();
           }
-          notes = notes.filter((n) => n.id !== note.id);
+          comments = comments.filter((n) => n.id !== comment.id);
           ctx.markDirty();
-          updateNotesBadge();
-          renderNotesRail();
+          updateCommentsBadge();
+          renderCommentsRail();
           recordNow();
         });
         list.appendChild(card);
       });
     }
 
-    function toggleNotesRail(force) {
-      if (!notesRail) return;
-      const open = force != null ? force : notesRail.classList.contains('hidden');
-      notesRail.classList.toggle('hidden', !open);
-      if (open) renderNotesRail();
+    function toggleCommentsRail(force) {
+      if (!commentsRail) return;
+      const open = force != null ? force : commentsRail.classList.contains('hidden');
+      commentsRail.classList.toggle('hidden', !open);
+      if (open) renderCommentsRail();
     }
 
-    function wrapSelectionWithNote(id) {
+    function wrapSelectionWithComment(id) {
       const sel = window.getSelection();
       if (!sel.rangeCount || sel.isCollapsed) return null;
       const range = sel.getRangeAt(0);
@@ -2708,23 +2732,23 @@
       return quote;
     }
 
-    async function addNote() {
+    async function addComment() {
       saveSelection();
       const sel = window.getSelection();
       if (!sel.rangeCount || sel.isCollapsed || !String(sel).trim()) {
         ctx.toast('Select some text first');
         return;
       }
-      const body = await ctx.inputModal('Add note', 'Write your note…', '');
+      const body = await ctx.inputModal('Add comment', 'Write your comment…', '');
       if (body == null || !String(body).trim()) return;
       restoreSelection();
       const id = uid();
-      const quote = wrapSelectionWithNote(id);
+      const quote = wrapSelectionWithComment(id);
       if (!quote) {
-        ctx.toast('Could not attach note to that selection');
+        ctx.toast('Could not attach a comment to that selection');
         return;
       }
-      notes.push({
+      comments.push({
         id,
         quote: quote.trim(),
         body: String(body).trim(),
@@ -2732,11 +2756,143 @@
         createdAt: new Date().toISOString()
       });
       ctx.markDirty();
-      updateNotesBadge();
-      toggleNotesRail(true);
-      renderNotesRail();
-      scrollToNote(id);
+      updateCommentsBadge();
+      toggleCommentsRail(true);
+      renderCommentsRail();
+      scrollToComment(id);
       recordNow();
+    }
+
+    /* ---------- right-click menu ---------- */
+    /* The ribbon holds everything, but the three things an author reaches for
+       mid-sentence - a link, a picture, a comment on what they just selected -
+       are the ones worth having under the cursor rather than up in a tab. */
+    let ctxMenuEl = null;
+    let ctxMenuDismiss = null;
+
+    function closeContextMenu() {
+      if (!ctxMenuEl) return;
+      document.removeEventListener('mousedown', ctxMenuDismiss, true);
+      document.removeEventListener('keydown', ctxMenuDismiss, true);
+      window.removeEventListener('resize', closeContextMenu, true);
+      ctxMenuEl.remove();
+      ctxMenuEl = null;
+      ctxMenuDismiss = null;
+    }
+
+    function hasTextSelection() {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) return false;
+      const page = getPage();
+      return !!(page && page.contains(sel.getRangeAt(0).commonAncestorContainer) && String(sel).trim());
+    }
+
+    async function pasteFromClipboard() {
+      const page = getPage();
+      if (!page) return;
+      page.focus();
+      restoreSelection();
+      let text = '';
+      try { text = await navigator.clipboard.readText(); } catch { /* denied or empty */ }
+      if (!text) return;
+      skipInputRecord = true;
+      try { document.execCommand('insertText', false, text); }
+      finally { skipInputRecord = false; }
+      ctx.markDirty();
+      recordNow();
+    }
+
+    function openContextMenu(clientX, clientY) {
+      closeContextMenu();
+      const selected = hasTextSelection();
+      const I = window.MargoIcons;
+      const items = [
+        { label: 'Cut', icon: I.cut, accel: 'Ctrl+X', enabled: selected, action: () => execClipboardCommand('cut') },
+        { label: 'Copy', icon: I.copy, accel: 'Ctrl+C', enabled: selected, action: () => execClipboardCommand('copy') },
+        { label: 'Paste', icon: I.paste, accel: 'Ctrl+V', enabled: true, action: () => pasteFromClipboard() },
+        { sep: true },
+        { label: 'Insert link…', icon: I.link, accel: 'Ctrl+K', enabled: true, action: () => insertLinkFromDialog() },
+        { label: 'Insert image…', icon: I.image, enabled: true, action: () => insertImageFromDialog() },
+        { sep: true },
+        /* Commenting needs something to attach to, so with nothing selected the
+           row explains itself rather than silently doing nothing. */
+        { label: 'Add comment', icon: I.comment, enabled: selected, hint: selected ? '' : 'Select text first',
+          action: () => addComment() }
+      ];
+
+      const el = document.createElement('div');
+      el.className = 'menu-drop doc-ctx-menu';
+      el.setAttribute('role', 'menu');
+      items.forEach((item) => {
+        if (item.sep) {
+          const sep = document.createElement('div');
+          sep.className = 'menu-sep';
+          el.appendChild(sep);
+          return;
+        }
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'menu-item' + (item.enabled ? '' : ' disabled');
+        row.setAttribute('role', 'menuitem');
+        const icon = document.createElement('span');
+        icon.className = 'menu-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = item.icon || '';
+        row.appendChild(icon);
+        const label = document.createElement('span');
+        label.className = 'menu-label';
+        label.textContent = item.label;
+        row.appendChild(label);
+        const trail = document.createElement('span');
+        trail.className = 'menu-accel';
+        trail.textContent = item.hint || item.accel || '';
+        row.appendChild(trail);
+        row.addEventListener('mousedown', (e) => e.preventDefault());
+        row.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!item.enabled) return;
+          closeContextMenu();
+          item.action();
+        });
+        el.appendChild(row);
+      });
+
+      /* Measured before placing, so a right-click near the bottom or the right
+         edge opens back towards the page instead of off it. */
+      el.style.visibility = 'hidden';
+      el.style.left = '0px';
+      el.style.top = '0px';
+      document.body.appendChild(el);
+      const margin = 6;
+      let left = clientX;
+      let top = clientY;
+      if (left + el.offsetWidth > window.innerWidth - margin) left = clientX - el.offsetWidth;
+      if (top + el.offsetHeight > window.innerHeight - margin) top = clientY - el.offsetHeight;
+      el.style.left = Math.max(margin, left) + 'px';
+      el.style.top = Math.max(margin, top) + 'px';
+      el.style.visibility = '';
+
+      ctxMenuEl = el;
+      ctxMenuDismiss = (e) => {
+        if (e.type === 'keydown') { if (e.key === 'Escape') closeContextMenu(); return; }
+        if (!el.contains(e.target)) closeContextMenu();
+      };
+      setTimeout(() => {
+        if (ctxMenuEl !== el) return;
+        document.addEventListener('mousedown', ctxMenuDismiss, true);
+        document.addEventListener('keydown', ctxMenuDismiss, true);
+        window.addEventListener('resize', closeContextMenu, true);
+      }, 0);
+      return el;
+    }
+
+    function onPageContextMenu(e) {
+      e.preventDefault();
+      /* The selection is what the menu acts on, so it is captured before the
+         menu takes focus away from it. */
+      saveSelection();
+      openContextMenu(e.clientX, e.clientY);
     }
 
     /* ---------- Ribbon Toolbar ---------- */
@@ -3014,12 +3170,9 @@
       makeSep(pInsert);
 
       makeBtn(pInsert, 'Insert image', I.image, () => insertImageFromDialog());
-      makeBtn(pInsert, 'Images in Document', I.image, () => showDocumentImagesPanel());
-      makeBtn(pInsert, 'Insert link (Ctrl+K)', I.link, async () => {
-        saveSelection();
-        const url = await ctx.inputModal('Insert link', 'https://…', 'https://');
-        if (url) { restoreSelection(); exec('createLink', url); }
-      });
+      makeBtn(pInsert, 'Images in Document', I.imageStack, () => showDocumentImagesPanel());
+      makeBtn(pInsert, 'Insert link (Ctrl+K)', I.link, () => insertLinkFromDialog());
+      makeBtn(pInsert, 'Add comment', I.comment, () => addComment());
       makeBtn(pInsert, 'Horizontal line', I.hr, () => exec('insertHorizontalRule'));
       makeBtn(pInsert, 'Symbols & Characters', I.symbol, () => openSymbolsPicker());
 
@@ -3181,7 +3334,7 @@
 
       makeSep(pLayout);
 
-      makeBtn(pLayout, 'Header Text', I.headerFooter || 'Header', async () => {
+      makeBtn(pLayout, 'Header Text', I.header, async () => {
         const text = await ctx.inputModal('Header Text', 'Text displayed in the top margin of each page…', layout.headerText || '');
         if (text != null) {
           layout.headerText = text.trim();
@@ -3190,7 +3343,7 @@
           recordNow();
         }
       });
-      makeBtn(pLayout, 'Footer Text', I.headerFooter || 'Footer', async () => {
+      makeBtn(pLayout, 'Footer Text', I.footer, async () => {
         const text = await ctx.inputModal('Footer Text', 'Text displayed in the bottom margin of each page…', layout.footerText || '');
         if (text != null) {
           layout.footerText = text.trim();
@@ -3203,13 +3356,13 @@
       /* ========== 4. REVIEW TAB ========== */
       const pReview = panels.review;
 
-      makeBtn(pReview, 'Add note', I.note || I.quote, () => addNote());
-      makeBtn(pReview, 'Toggle Notes panel', I.bell || I.note, () => toggleNotesRail());
+      makeBtn(pReview, 'Add comment', I.comment, () => addComment());
+      makeBtn(pReview, 'Toggle Comments panel', I.commentsPanel, () => toggleCommentsRail());
       makeBtn(pReview, 'Find & Replace (Ctrl+F)', I.search || I.replace, () => openFind());
 
       makeSep(pReview);
 
-      makeBtn(pReview, 'Images in Document', I.image || '🖼️', () => showDocumentImagesPanel());
+      makeBtn(pReview, 'Images in Document', I.imageStack, () => showDocumentImagesPanel());
       makeBtn(pReview, 'Document Statistics', I.stats || '📊', () => openStatsModal());
       makeBtn(pReview, 'Toggle Spellcheck', I.spellcheck || 'ABC', () => {
         const p = getPage();
@@ -3267,7 +3420,7 @@
       mount(host, doc) {
         buildRibbon();
         hostEl = host;
-        notes = Array.isArray(doc.notes) ? doc.notes.map((n) => ({ ...n })) : [];
+        comments = Array.isArray(doc.notes) ? doc.notes.map((n) => ({ ...n })) : [];
         if (doc.layout && typeof doc.layout === 'object') {
           layout = { ...layout, ...doc.layout };
         }
@@ -3284,9 +3437,9 @@
             `<div class="doc-scroll doc-scroll-edit">` +
               `<div class="doc-pages"></div>` +
               `<div class="doc-fab-stack">` +
-                `<button type="button" class="doc-notes-fab" title="Notes" aria-label="Open notes">` +
-                  `<span class="doc-notes-fab-icon"></span>` +
-                  `<span class="doc-notes-badge hidden">0</span>` +
+                `<button type="button" class="doc-comments-fab" title="Comments" aria-label="Open comments">` +
+                  `<span class="doc-comments-fab-icon"></span>` +
+                  `<span class="doc-comments-badge hidden">0</span>` +
                 `</button>` +
                 `<button type="button" class="doc-add-page" title="Add page" aria-label="Add page">+</button>` +
               `</div>` +
@@ -3296,12 +3449,12 @@
               `<div class="doc-pages doc-pages-preview"></div>` +
             `</div>` +
           `</div>` +
-          `<aside class="doc-notes-rail hidden" aria-label="Notes">` +
-            `<div class="doc-notes-rail-head">` +
-              `<strong>Notes</strong>` +
-              `<button type="button" class="icon-btn doc-notes-rail-close" title="Close">${window.MargoIcons.close}</button>` +
+          `<aside class="doc-comments-rail hidden" aria-label="Comments">` +
+            `<div class="doc-comments-rail-head">` +
+              `<strong>Comments</strong>` +
+              `<button type="button" class="icon-btn doc-comments-rail-close" title="Close">${window.MargoIcons.close}</button>` +
             `</div>` +
-            `<div class="doc-notes-list"></div>` +
+            `<div class="doc-comments-list"></div>` +
           `</aside>`;
 
         scrollEl = host.querySelector('.doc-scroll-edit');
@@ -3310,13 +3463,13 @@
         splitGutter = host.querySelector('.doc-split-gutter');
         splitPreviewScroll = host.querySelector('.doc-scroll-preview');
         splitPreviewRoot = host.querySelector('.doc-pages-preview');
-        notesRail = host.querySelector('.doc-notes-rail');
-        notesFab = host.querySelector('.doc-notes-fab');
-        notesBadge = host.querySelector('.doc-notes-badge');
+        commentsRail = host.querySelector('.doc-comments-rail');
+        commentsFab = host.querySelector('.doc-comments-fab');
+        commentsBadge = host.querySelector('.doc-comments-badge');
         outlineRail = host.querySelector('.doc-outline-rail');
         const addBtn = host.querySelector('.doc-add-page');
-        const fabIcon = host.querySelector('.doc-notes-fab-icon');
-        if (fabIcon) fabIcon.innerHTML = window.MargoIcons.bell || window.MargoIcons.note;
+        const fabIcon = host.querySelector('.doc-comments-fab-icon');
+        if (fabIcon) fabIcon.innerHTML = window.MargoIcons.comment;
 
         splitPages(doc.html || EMPTY_PAGE).forEach((html, i) => {
           const el = makePageEl(html);
@@ -3351,6 +3504,7 @@
         pagesRoot.addEventListener('copy', onPageCopy);
         pagesRoot.addEventListener('cut', onPageCut);
         pagesRoot.addEventListener('keydown', onPageKeydown);
+        pagesRoot.addEventListener('contextmenu', onPageContextMenu);
         document.addEventListener('pointermove', onSelectPointerMove, true);
         document.addEventListener('pointerup', onSelectPointerUp, true);
         document.addEventListener('pointercancel', onSelectPointerCancel, true);
@@ -3380,13 +3534,13 @@
 
         addBtn.addEventListener('mousedown', (e) => e.preventDefault());
         addBtn.addEventListener('click', () => addPage());
-        notesFab.addEventListener('mousedown', (e) => e.preventDefault());
-        notesFab.addEventListener('click', () => {
-          toggleNotesRail(true);
-          const target = notes.find((n) => !n.done) || notes[0];
-          if (target) scrollToNote(target.id);
+        commentsFab.addEventListener('mousedown', (e) => e.preventDefault());
+        commentsFab.addEventListener('click', () => {
+          toggleCommentsRail(true);
+          const target = comments.find((n) => !n.done) || comments[0];
+          if (target) scrollToComment(target.id);
         });
-        notesRail.querySelector('.doc-notes-rail-close').addEventListener('click', () => toggleNotesRail(false));
+        commentsRail.querySelector('.doc-comments-rail-close').addEventListener('click', () => toggleCommentsRail(false));
         outlineRail.querySelector('.doc-outline-close').addEventListener('click', () => toggleOutlineRail(false));
         scrollEl.addEventListener('wheel', onCtrlWheel, { passive: false });
         scrollEl.addEventListener('wheel', onSelectWheelLock, { passive: true });
@@ -3395,8 +3549,8 @@
         setViewMode('print');
 
         ensureFindBar();
-        rehydrateNoteAnchors();
-        updateNotesBadge();
+        rehydrateCommentAnchors();
+        updateCommentsBadge();
         loadSystemFonts();
         updateStatus();
         refreshStates();
@@ -3419,6 +3573,7 @@
         }
 
         this._cleanup = () => {
+          closeContextMenu();
           cancelTypingWork();
           if (paginateTimer) { clearTimeout(paginateTimer); paginateTimer = 0; }
           if (statesRaf) { cancelAnimationFrame(statesRaf); statesRaf = 0; }
@@ -3436,6 +3591,7 @@
             pagesRoot.removeEventListener('copy', onPageCopy);
             pagesRoot.removeEventListener('cut', onPageCut);
             pagesRoot.removeEventListener('keydown', onPageKeydown);
+            pagesRoot.removeEventListener('contextmenu', onPageContextMenu);
             pagesRoot.style.cursor = '';
           }
           if (scrollEl) {
@@ -3448,7 +3604,9 @@
         this._test = {
           addPage: () => addPage(),
           openFind,
-          addNote,
+          addComment,
+          openContextMenu: (x, y) => openContextMenu(x, y),
+          closeContextMenu,
           openStats: openStatsModal,
           selectAll: () => selectAllDocument(),
           copyPayload: () => buildCopyPayload(),

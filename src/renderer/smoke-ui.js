@@ -203,6 +203,147 @@
       page.insertAdjacentHTML('beforeend', '<p>Doc smoke edit.</p>');
       page.dispatchEvent(new Event('input', { bubbles: true }));
       t('doc edit marks dirty', T.state.dirty === true);
+      // right-click menu + comments
+      {
+        const edCtx = T.getEditor();
+        const api = edCtx && edCtx._test;
+        if (api && api.openContextMenu) {
+          const target = page.querySelector('p') || page;
+          const selectTarget = () => {
+            const r = document.createRange();
+            r.selectNodeContents(target);
+            const s3 = window.getSelection();
+            s3.removeAllRanges(); s3.addRange(r);
+          };
+
+          // nothing selected: the destructive and selection-bound rows are off
+          window.getSelection().removeAllRanges();
+          api.openContextMenu(200, 200);
+          await wait(20);
+          let menu = document.querySelector('.doc-ctx-menu');
+          const rowFor = (label) => menu && [...menu.querySelectorAll('.menu-item')]
+            .find((r) => r.querySelector('.menu-label').textContent === label);
+          t('doc right-click menu opens', !!menu);
+          t('doc right-click rows all carry an icon',
+            !!menu && [...menu.querySelectorAll('.menu-item')].every((r) => !!r.querySelector('.menu-icon svg')),
+            menu ? [...menu.querySelectorAll('.menu-item')]
+              .filter((r) => !r.querySelector('.menu-icon svg'))
+              .map((r) => r.querySelector('.menu-label').textContent).join(',') || 'all iconed' : 'no menu');
+          t('doc right-click menu offers link, image and comment',
+            !!rowFor('Insert link…') && !!rowFor('Insert image…') && !!rowFor('Add comment'),
+            menu ? menu.textContent.slice(0, 120) : 'no menu');
+          t('doc right-click comment needs a selection',
+            !!rowFor('Add comment') && rowFor('Add comment').classList.contains('disabled'));
+          t('doc right-click paste stays available with no selection',
+            !!rowFor('Paste') && !rowFor('Paste').classList.contains('disabled'));
+          api.closeContextMenu();
+          t('doc right-click menu closes', !document.querySelector('.doc-ctx-menu'));
+
+          // with a selection the comment row comes alive
+          selectTarget();
+          api.openContextMenu(200, 200);
+          await wait(20);
+          menu = document.querySelector('.doc-ctx-menu');
+          t('doc right-click comment enabled with a selection',
+            !!rowFor('Add comment') && !rowFor('Add comment').classList.contains('disabled'));
+          t('doc right-click cut enabled with a selection',
+            !!rowFor('Cut') && !rowFor('Cut').classList.contains('disabled'));
+          api.closeContextMenu();
+
+          // the menu must not run off the bottom-right corner
+          api.openContextMenu(window.innerWidth - 4, window.innerHeight - 4);
+          await wait(20);
+          const box = document.querySelector('.doc-ctx-menu').getBoundingClientRect();
+          t('doc right-click menu stays on screen',
+            box.right <= window.innerWidth && box.bottom <= window.innerHeight,
+            `right=${Math.round(box.right)}/${window.innerWidth} bottom=${Math.round(box.bottom)}/${window.innerHeight}`);
+          api.closeContextMenu();
+        }
+
+        // the rail and its rename
+        const railBtns = [...document.querySelectorAll('.doc-ribbon-panel .icon-btn')];
+        t('doc comment button sits in the Insert tab as well',
+          railBtns.filter((b) => b.title === 'Add comment').length >= 2,
+          String(railBtns.filter((b) => b.title === 'Add comment').length));
+        t('doc has no Add note label left',
+          !railBtns.some((b) => /note/i.test(b.title || '')),
+          railBtns.map((b) => b.title).filter((x) => /note/i.test(x || '')).join(','));
+        /* The browser rewrites SVG markup on parse, so both sides are put
+           through it before being compared. */
+        const asParsed = (svg) => { const d = document.createElement('div'); d.innerHTML = svg || ''; return d.innerHTML; };
+        const commentIcon = asParsed(window.MargoIcons.comment);
+        t('doc comment buttons use the comment icon, not the old note or bell',
+          railBtns.filter((b) => b.title === 'Add comment').length > 0
+          && railBtns.filter((b) => b.title === 'Add comment')
+            .every((b) => asParsed(b.innerHTML) === commentIcon
+              && asParsed(b.innerHTML) !== asParsed(window.MargoIcons.note)
+              && asParsed(b.innerHTML) !== asParsed(window.MargoIcons.bell)));
+        t('doc comment and rail toggle do not share an icon',
+          window.MargoIcons.comment !== window.MargoIcons.commentsPanel);
+        // no two buttons in one ribbon panel may wear the same icon
+        {
+          const clashes = [];
+          document.querySelectorAll('.doc-ribbon-panel').forEach((panel) => {
+            const seen = new Map();
+            panel.querySelectorAll('.icon-btn').forEach((b) => {
+              const key = b.innerHTML;
+              if (seen.has(key)) clashes.push(`${seen.get(key)} = ${b.title}`);
+              else seen.set(key, b.title);
+            });
+          });
+          t('doc ribbon has no two buttons sharing an icon', clashes.length === 0, clashes.join(' | '));
+        }
+
+        // resolving a comment has to stop marking up the page
+        {
+          const target2 = page.querySelector('p') || page;
+          target2.innerHTML = 'Resolve this sentence.';
+          const r2 = document.createRange();
+          r2.selectNodeContents(target2);
+          const s4 = window.getSelection();
+          s4.removeAllRanges(); s4.addRange(r2);
+          const pending = edCtx._test.addComment();
+          await wait(120);
+          const modal2 = document.querySelector('.modal');
+          const input2 = modal2 && modal2.querySelector('input');
+          if (input2) {
+            input2.value = 'Resolve me.';
+            input2.dispatchEvent(new Event('input', { bubbles: true }));
+            [...modal2.querySelectorAll('button')].find((b) => b.textContent.trim() === 'OK').click();
+          }
+          await Promise.resolve(pending).catch(() => {});
+          await wait(200);
+          const anchor = page.querySelector('.margo-note-anchor')
+            || document.querySelector('.tab-pane:not([hidden]) .margo-note-anchor');
+          t('doc comment anchors the selection', !!anchor);
+          t('doc open comment stays highlighted',
+            !!anchor && !anchor.classList.contains('is-resolved'));
+
+          const doneBox = document.querySelector('.doc-comment-card .doc-comment-done input');
+          t('doc comment card offers Done', !!doneBox);
+          if (doneBox && anchor) {
+            doneBox.checked = true;
+            doneBox.dispatchEvent(new Event('change', { bubbles: true }));
+            await wait(60);
+            t('doc resolved comment drops its highlight',
+              anchor.classList.contains('is-resolved'), anchor.className);
+            t('doc resolved comment leaves the count at zero',
+              document.querySelector('.doc-comments-badge').classList.contains('hidden'));
+
+            doneBox.checked = false;
+            doneBox.dispatchEvent(new Event('change', { bubbles: true }));
+            await wait(60);
+            t('doc reopened comment is highlighted again',
+              !anchor.classList.contains('is-resolved'), anchor.className);
+          }
+        }
+
+        t('doc comments rail exists', !!document.querySelector('.doc-comments-rail'));
+        t('doc comments rail is titled Comments',
+          !!document.querySelector('.doc-comments-rail-head strong')
+          && document.querySelector('.doc-comments-rail-head strong').textContent === 'Comments');
+      }
+
       // colour picker: palette, custom hex, highlight, and clearing
       {
         const PICKER = window.MargoColorPicker;
