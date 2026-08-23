@@ -359,7 +359,8 @@ function normalizeCell(v) {
       return '=' + v.formula;
     }
     if ('sharedFormula' in v) {
-      return '=' + (v.sharedFormula || (v.result !== undefined ? v.result : ''));
+      if (v.result !== undefined) return normalizeCell(v.result);
+      return '';
     }
     if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join('');
     if ('error' in v) return String(v.error);
@@ -484,14 +485,17 @@ function formatDate(d) {
 }
 
 function workbookToModel(wb) {
+  const meta = readMargoMeta(wb);
+  const chartsBySheet = (meta && meta.chartsBySheet) || {};
   const sheets = [];
   wb.eachSheet((ws) => {
+    if (ws.name === MARGO_META_SHEET) return;
     const rows = [];
     const styles = {};
     const colWidths = {};
     const rowHeights = {};
     ws.columns.forEach((col, idx) => {
-      if (col && col.width) colWidths[idx] = col.width;
+      if (col && col.width) colWidths[idx] = excelWidthToPx(col.width);
     });
     ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
       // Excel keeps row height in points; the grid works in CSS pixels.
@@ -512,7 +516,7 @@ function workbookToModel(wb) {
       styles,
       colWidths,
       rowHeights,
-      charts: []
+      charts: Array.isArray(chartsBySheet[ws.name]) ? chartsBySheet[ws.name] : []
     });
   });
   if (!sheets.length) sheets.push({ name: 'Sheet1', rows: [], styles: {}, colWidths: {}, rowHeights: {}, charts: [] });
@@ -1149,6 +1153,74 @@ function sanitizeSheetName(name) {
   return String(name || '').replace(/[\\\/\?\*\[\]:]/g, ' ').trim().slice(0, 31);
 }
 
+function excelWidthToPx(w) {
+  return Math.round(Number(w) * 7 + 5);
+}
+
+function pxToExcelWidth(px) {
+  return Math.max(1, Math.min(255, (Number(px) - 5) / 7));
+}
+
+const MARGO_META_SHEET = '__MargoMeta__';
+
+function readMargoMeta(wb) {
+  const ws = wb.getWorksheet(MARGO_META_SHEET);
+  if (!ws) return null;
+  try {
+    const raw = ws.getCell(1, 1).value;
+    const text = raw == null ? '' : (typeof raw === 'object' && raw.text != null ? raw.text : String(raw));
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function writeMargoMeta(wb, sheets) {
+  const chartsBySheet = {};
+  sheets.forEach((sheet) => {
+    if (sheet.charts && sheet.charts.length) {
+      chartsBySheet[sheet.name] = sheet.charts;
+    }
+  });
+  if (!Object.keys(chartsBySheet).length) return;
+  const ws = wb.addWorksheet(MARGO_META_SHEET);
+  ws.state = 'veryHidden';
+  ws.getCell(1, 1).value = JSON.stringify({ version: 1, chartsBySheet });
+}
+
+function applyModelCellStyle(cell, st) {
+  if (!st) return;
+  if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color || st.face) {
+    cell.font = excelFontFromStyle(st);
+  }
+  if (st.fill && st.fill !== '#ffffff') {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF' + st.fill.replace('#', '') }
+    };
+  }
+  if (st.border) {
+    const edgeStyle = st.border === 'thick' ? 'medium' : 'thin';
+    cell.border = {
+      top: { style: edgeStyle },
+      left: { style: edgeStyle },
+      bottom: { style: edgeStyle },
+      right: { style: edgeStyle }
+    };
+  }
+  if (st.align || st.valign || st.wrap) {
+    cell.alignment = {
+      horizontal: st.align || undefined,
+      vertical: st.valign || undefined,
+      wrapText: !!st.wrap
+    };
+  }
+  if (st.numFmt) {
+    cell.numFmt = st.numFmt;
+  }
+}
+
 function modelToWorkbook(sheets) {
   const wb = new ExcelJS.Workbook();
   const used = new Set();
@@ -1159,7 +1231,7 @@ function modelToWorkbook(sheets) {
     used.add(unique.toLowerCase());
 
     const ws = wb.addWorksheet(unique);
-    const colWidths = { ...(sheet.colWidths || {}) };
+    const explicitColWidths = { ...(sheet.colWidths || {}) };
     const styles = sheet.styles || {};
 
     (sheet.rows || []).forEach((row, r) => {
@@ -1172,39 +1244,32 @@ function modelToWorkbook(sheets) {
         } else {
           cell.value = coerceValue(val);
         }
-        const len = sVal.length;
-        if (!colWidths[c] || len > colWidths[c]) colWidths[c] = len;
-
-        const st = styles[`${r},${c}`];
-        if (st) {
-          if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color || st.face) {
-            cell.font = excelFontFromStyle(st);
-          }
-          if (st.fill && st.fill !== '#ffffff') {
-            cell.fill = {
-              type: 'pattern',
-              pattern: 'solid',
-              fgColor: { argb: 'FF' + st.fill.replace('#', '') }
-            };
-          }
-          if (st.align || st.valign || st.wrap) {
-            cell.alignment = {
-              horizontal: st.align || undefined,
-              vertical: st.valign || undefined,
-              wrapText: !!st.wrap
-            };
-          }
-          if (st.numFmt) {
-            cell.numFmt = st.numFmt;
-          }
-        }
+        applyModelCellStyle(cell, styles[`${r},${c}`]);
       });
     });
-    Object.entries(colWidths).forEach(([c, w]) => {
+
+    Object.keys(styles).forEach((key) => {
+      const [rStr, cStr] = key.split(',');
+      const r = parseInt(rStr, 10);
+      const c = parseInt(cStr, 10);
+      const row = sheet.rows[r];
+      const val = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
+      if (val === '' || val === null || val === undefined) {
+        applyModelCellStyle(ws.getCell(r + 1, c + 1), styles[key]);
+      }
+    });
+
+    Object.entries(sheet.rowHeights || {}).forEach(([r, px]) => {
+      const row = ws.getRow(parseInt(r, 10) + 1);
+      if (px) row.height = px * 72 / 96;
+    });
+
+    Object.entries(explicitColWidths).forEach(([c, px]) => {
       const colNum = parseInt(c, 10) + 1;
-      if (w) ws.getColumn(colNum).width = Math.min(Math.max(w + 2, 9), 42);
+      if (px) ws.getColumn(colNum).width = pxToExcelWidth(px);
     });
   });
+  writeMargoMeta(wb, sheets);
   return wb;
 }
 
@@ -1233,5 +1298,8 @@ module.exports = {
   maybeEmbedDocxNotes,
   htmlForPdfExport,
   turndownHtml: (html) => turndown.turndown(html),
-  markedParse: (md) => marked.parse(md)
+  markedParse: (md) => marked.parse(md),
+  normalizeCell,
+  modelToWorkbook,
+  workbookToModel
 };

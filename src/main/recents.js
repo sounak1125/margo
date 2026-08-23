@@ -40,11 +40,9 @@ function add(filePath, kind) {
 }
 
 function list() {
-  const arr = readAll().filter((r) => {
-    try { return fs.existsSync(r.path); } catch { return false; }
+  return readAll().filter((r) => {
+    try { return fs.existsSync(r.path); } catch { return true; }
   });
-  writeAll(arr);
-  return arr;
 }
 
 function remove(filePath) {

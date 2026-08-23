@@ -89,7 +89,7 @@ async function ensureFolder(token, existingId) {
       if (f && f.id && !f.trashed) return f.id;
     } catch {}
   }
-  const q = encodeURIComponent("name='Margo' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+  const q = encodeURIComponent("name='Margo' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners");
   const listed = await driveFetch(token, DRIVE + '/files?q=' + q + '&fields=files(id,name)&pageSize=5');
   if (listed.files && listed.files[0]) return listed.files[0].id;
   const created = await driveFetch(token, DRIVE + '/files?fields=id', {
@@ -109,11 +109,19 @@ async function getFile(token, fileId) {
 
 async function listFolder(token, folderId) {
   const q = encodeURIComponent("'" + folderId + "' in parents and trashed=false");
-  const json = await driveFetch(
-    token,
-    DRIVE + '/files?q=' + q + '&fields=files(id,name,mimeType,modifiedTime,size)&pageSize=100&orderBy=modifiedTime desc'
-  );
-  return json.files || [];
+  const files = [];
+  let pageToken = '';
+  const MAX = 1000;
+  while (files.length < MAX) {
+    let url = DRIVE + '/files?q=' + q +
+      '&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=100&orderBy=modifiedTime desc';
+    if (pageToken) url += '&pageToken=' + encodeURIComponent(pageToken);
+    const json = await driveFetch(token, url);
+    if (json.files && json.files.length) files.push(...json.files);
+    pageToken = json.nextPageToken;
+    if (!pageToken) break;
+  }
+  return files.slice(0, MAX);
 }
 
 async function downloadFile(token, fileId) {

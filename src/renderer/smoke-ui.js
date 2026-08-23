@@ -711,6 +711,16 @@
       t('sheet formula IF calculates', ed._test.getFormatted(4, 1) === 'Big', ed._test.getFormatted(4, 1));
       ed._test.setCell(5, 1, '=AVERAGE(B2:B3)');
       t('sheet formula AVERAGE calculates', ed._test.getFormatted(5, 1) === '15', ed._test.getFormatted(5, 1));
+      ed._test.setCell(6, 1, '5');
+      ed._test.setCell(6, 2, '10');
+      ed._test.setCell(7, 1, '=A6<=B6');
+      ed._test.setCell(7, 2, '=A6<>B6');
+      ed._test.setCell(7, 3, '=-A6');
+      ed._test.setCell(8, 1, '=ROUND(1234,-1)');
+      t('sheet formula comparisons', ed._test.getFormatted(7, 1) === 'TRUE' && ed._test.getFormatted(7, 2) === 'TRUE',
+        `${ed._test.getFormatted(7, 1)} / ${ed._test.getFormatted(7, 2)}`);
+      t('sheet formula unary minus', ed._test.getFormatted(7, 3) === '-5', ed._test.getFormatted(7, 3));
+      t('sheet formula ROUND negative digits', ed._test.getFormatted(8, 1) === '1230', ed._test.getFormatted(8, 1));
 
       // Test cell sizing and text size
       ed._test.setColWidth(0, 150);

@@ -71,17 +71,20 @@
     ROUND: (args) => {
       const n = toNum(args[0]) || 0;
       const d = toNum(args[1]) || 0;
-      return Number(Math.round(Number(n + 'e' + d)) + 'e-' + d);
+      const p = Math.pow(10, d);
+      return Math.round(n * p) / p;
     },
     ROUNDUP: (args) => {
       const n = toNum(args[0]) || 0;
       const d = toNum(args[1]) || 0;
-      return Number(Math.ceil(Number(n + 'e' + d)) + 'e-' + d);
+      const p = Math.pow(10, d);
+      return Math.ceil(n * p) / p;
     },
     ROUNDDOWN: (args) => {
       const n = toNum(args[0]) || 0;
       const d = toNum(args[1]) || 0;
-      return Number(Math.floor(Number(n + 'e' + d)) + 'e-' + d);
+      const p = Math.pow(10, d);
+      return Math.floor(n * p) / p;
     },
     ABS: (args) => Math.abs(toNum(args[0]) || 0),
     SQRT: (args) => Math.sqrt(toNum(args[0]) || 0),
@@ -242,6 +245,7 @@
   function formatCellValue(val, fmt = 'general', decimals = 2) {
     if (val === '' || val == null) return '';
     if (isError(val)) return String(val);
+    if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
     const n = toNum(val);
 
     switch (fmt.toLowerCase()) {
@@ -330,6 +334,66 @@
     let activeRibbonTab = 'home';
     let currentCalcCycle = new Set();
     let autoFilterActive = false;
+    let formulaBarSnapshot = null;
+    let onDocMouseUp = null;
+    const FILTER_HEADER_ROW = 0;
+
+    function sheetFilters() {
+      const sh = sheet();
+      if (!sh.filterByCol) sh.filterByCol = {};
+      return sh.filterByCol;
+    }
+
+    function rowPassesFilter(r) {
+      if (!autoFilterActive || r === FILTER_HEADER_ROW) return true;
+      const filters = sheetFilters();
+      for (const col of Object.keys(filters)) {
+        const val = filters[col];
+        if (val == null || val === '') continue;
+        const cell = String(getCellRaw(r, parseInt(col, 10))).toLowerCase();
+        if (cell !== String(val).toLowerCase()) return false;
+      }
+      return true;
+    }
+
+    function applyRowVisibility(tr, r) {
+      if (!tr) return;
+      tr.style.display = rowPassesFilter(r) ? '' : 'none';
+    }
+
+    function refreshFilterVisibility() {
+      if (!tbody) return;
+      Array.from(tbody.rows).forEach((tr, r) => applyRowVisibility(tr, r));
+    }
+
+    function openColumnFilter(c) {
+      if (!autoFilterActive) return;
+      const values = new Set();
+      const maxR = Math.max((sheet().rows || []).length - 1, viewR - 1);
+      for (let r = FILTER_HEADER_ROW + 1; r <= maxR; r++) {
+        const v = getCellRaw(r, c);
+        if (v !== '') values.add(v);
+      }
+      const sorted = ['', ...Array.from(values).sort((a, b) => String(a).localeCompare(String(b)))];
+      const labels = sorted.map((v, i) => (i === 0 ? 'All' : v));
+      const cur = sheetFilters()[c] || '';
+      const pick = labels[Math.max(0, (sorted.indexOf(cur) + 1) % labels.length)];
+      if (pick === 'All') delete sheetFilters()[c];
+      else sheetFilters()[c] = pick;
+      refreshFilterVisibility();
+      recordSheet();
+      ctx.toast(pick === 'All' ? `Column ${colName(c)}: show all` : `Column ${colName(c)}: ${pick}`);
+    }
+
+    function wireFilterBtn(th, c) {
+      const btn = th.querySelector('.sheet-filter-btn');
+      if (!btn) return;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openColumnFilter(c);
+      });
+    }
 
     const sheet = () => model.sheets[model.active];
     const getCellRaw = (r, c, sheetIdx = model.active) => {
@@ -444,6 +508,17 @@
         }
       }
 
+      // Unary +/-
+      if (str.startsWith('-') || str.startsWith('+')) {
+        const sign = str[0];
+        const inner = parseExpression(str.slice(1), curR, curC, sIdx);
+        if (sign === '-') {
+          const n = toNum(inner);
+          if (n != null) return -n;
+        }
+        return inner;
+      }
+
       // Binary operations
       const op = findLowestPrecedenceOp(str);
       if (op) {
@@ -508,7 +583,7 @@
       let depth = 0;
       let inQuotes = false;
       const ops = [
-        ['=', '<>', '<=', '>=', '<', '>'],
+        ['<>', '<=', '>=', '=', '<', '>'],
         ['&'],
         ['+', '-'],
         ['*', '/'],
@@ -522,9 +597,11 @@
           else if (!inQuotes && ch === '(') depth--;
           else if (!inQuotes && depth === 0) {
             for (const op of opGroup) {
-              if (str.substr(i, op.length) === op && (i > 0 || (op !== '+' && op !== '-'))) {
-                return { token: op, index: i, len: op.length };
-              }
+              if (str.substr(i, op.length) !== op) continue;
+              if (i === 0 && (op === '+' || op === '-')) continue;
+              if (op === '=' && (str[i - 1] === '<' || str[i - 1] === '>')) continue;
+              if (op === '>' && str[i - 1] === '<') continue;
+              return { token: op, index: i, len: op.length };
             }
           }
         }
@@ -588,6 +665,7 @@
       row[c] = value;
 
       recalculateGrid();
+      if (autoFilterActive) refreshFilterVisibility();
       ctx.markDirty();
       updateStatus();
       if (!skipUndo) recordSheet();
@@ -741,6 +819,7 @@
         th.innerHTML = `<span>${colName(c)}</span>${autoFilterActive ? '<span class="sheet-filter-btn">▼</span>' : ''}`;
         th.dataset.c = c;
         wireColResizer(th, c);
+        if (autoFilterActive) wireFilterBtn(th, c);
         hr.appendChild(th);
       }
       theadEl.appendChild(hr);
@@ -772,6 +851,7 @@
           tr.appendChild(td);
         }
         tbody.appendChild(tr);
+        applyRowVisibility(tr, r);
       }
       tableEl.appendChild(tbody);
       gridScroll.innerHTML = '';
@@ -918,6 +998,7 @@
           tr.appendChild(td);
         }
         tbody.appendChild(tr);
+        applyRowVisibility(tr, r);
       }
     }
 
@@ -938,6 +1019,7 @@
         th.innerHTML = `<span>${colName(c)}</span>${autoFilterActive ? '<span class="sheet-filter-btn">▼</span>' : ''}`;
         th.dataset.c = c;
         wireColResizer(th, c);
+        if (autoFilterActive) wireFilterBtn(th, c);
         hr.appendChild(th);
       }
       Array.from(tbody.rows).forEach((tr, r) => {
@@ -1840,6 +1922,7 @@
       makeBtn(pData, 'Sort Descending', I.sortZA || 'Z-A', () => sortSelectedRange(false));
       makeBtn(pData, 'Filter', I.filter || '🌪️', () => {
         autoFilterActive = !autoFilterActive;
+        if (!autoFilterActive) Object.keys(sheetFilters()).forEach((k) => delete sheetFilters()[k]);
         renderGrid();
         ctx.toast(`AutoFilter ${autoFilterActive ? 'enabled' : 'disabled'}`);
         recordSheet();
@@ -1869,21 +1952,89 @@
       makeBtn(pView, 'Shorter Row', '<span class="tb-glyph">Row-</span>', () => setRowHeight(sel.r, getRowHeight(sel.r) - 8));
     }
 
+    function selectionBounds() {
+      const minR = selEnd ? Math.min(sel.r, selEnd.r) : sel.r;
+      const maxR = selEnd ? Math.max(sel.r, selEnd.r) : sel.r;
+      const minC = selEnd ? Math.min(sel.c, selEnd.c) : sel.c;
+      const maxC = selEnd ? Math.max(sel.c, selEnd.c) : sel.c;
+      return { minR, maxR, minC, maxC };
+    }
+
+    function copySelectionToTsv() {
+      const { minR, maxR, minC, maxC } = selectionBounds();
+      const lines = [];
+      for (let r = minR; r <= maxR; r++) {
+        const cells = [];
+        for (let c = minC; c <= maxC; c++) cells.push(getCellRaw(r, c));
+        lines.push(cells.join('\t'));
+      }
+      return lines.join('\n');
+    }
+
+    function pasteTsv(text) {
+      const { minR, minC } = selectionBounds();
+      const rows = String(text).replace(/\r?\n$/, '').split(/\r?\n/);
+      rows.forEach((line, dr) => {
+        line.split('\t').forEach((val, dc) => {
+          setCell(minR + dr, minC + dc, val, true);
+        });
+      });
+      recordSheet();
+      formulaInput.value = getCellRaw(sel.r, sel.c);
+      recalculateGrid();
+      ctx.markDirty();
+    }
+
+    function cutSelection() {
+      const text = copySelectionToTsv();
+      try { navigator.clipboard.writeText(text); } catch {}
+      const { minR, maxR, minC, maxC } = selectionBounds();
+      for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) setCell(r, c, '', true);
+      }
+      recordSheet();
+      formulaInput.value = getCellRaw(sel.r, sel.c);
+      recalculateGrid();
+      ctx.markDirty();
+    }
+
     function sortSelectedRange(ascending = true) {
       const minR = selEnd ? Math.min(sel.r, selEnd.r) : 0;
       const maxR = selEnd ? Math.max(sel.r, selEnd.r) : sheet().rows.length - 1;
       const c = sel.c;
-      const sub = sheet().rows.slice(minR, maxR + 1);
-      sub.sort((a, b) => {
+      const sh = sheet();
+      const order = [];
+      for (let r = minR; r <= maxR; r++) order.push(r);
+      order.sort((ra, rb) => {
+        const a = sh.rows[ra];
+        const b = sh.rows[rb];
         const va = (a && a[c] != null ? a[c] : '');
         const vb = (b && b[c] != null ? b[c] : '');
         const na = toNum(va), nb = toNum(vb);
         if (na != null && nb != null) return ascending ? na - nb : nb - na;
         return ascending ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
       });
-      for (let r = minR; r <= maxR; r++) {
-        sheet().rows[r] = sub[r - minR];
+      const oldStyles = sh.styles || {};
+      const newStyles = { ...oldStyles };
+      const oldHeights = sh.rowHeights || {};
+      const newHeights = { ...oldHeights };
+      for (const key of Object.keys(oldStyles)) {
+        const r = parseInt(key.split(',')[0], 10);
+        if (r >= minR && r <= maxR) delete newStyles[key];
       }
+      for (let r = minR; r <= maxR; r++) delete newHeights[r];
+      for (let i = 0; i < order.length; i++) {
+        const oldR = order[i];
+        const newR = minR + i;
+        sh.rows[newR] = sh.rows[oldR] ? sh.rows[oldR].slice() : [];
+        for (const key of Object.keys(oldStyles)) {
+          const [rStr, cStr] = key.split(',');
+          if (parseInt(rStr, 10) === oldR) newStyles[`${newR},${cStr}`] = oldStyles[key];
+        }
+        if (oldHeights[oldR] != null) newHeights[newR] = oldHeights[oldR];
+      }
+      sh.styles = newStyles;
+      sh.rowHeights = newHeights;
       ctx.markDirty();
       recalculateGrid();
       recordSheet();
@@ -1932,7 +2083,7 @@
         }
       });
 
-      document.addEventListener('mouseup', () => {
+      document.addEventListener('mouseup', onDocMouseUp = () => {
         dragging = false;
         dragStart = null;
       });
@@ -1997,19 +2148,18 @@
         }
         if (e.ctrlKey && e.key.toLowerCase() === 'c') {
           e.preventDefault();
-          try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {}
+          try { navigator.clipboard.writeText(copySelectionToTsv()); } catch {}
           return;
         }
         if (e.ctrlKey && e.key.toLowerCase() === 'x') {
           e.preventDefault();
-          try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {}
-          setCell(sel.r, sel.c, ''); formulaInput.value = '';
+          cutSelection();
           return;
         }
         if (e.ctrlKey && e.key.toLowerCase() === 'v') {
           e.preventDefault();
           navigator.clipboard.readText().then((t) => {
-            if (t !== undefined && t !== null) { setCell(sel.r, sel.c, t.replace(/\r?\n$/, '')); formulaInput.value = getCellRaw(sel.r, sel.c); }
+            if (t !== undefined && t !== null) pasteTsv(t);
           }).catch(() => {});
           return;
         }
@@ -2027,14 +2177,33 @@
         if (nearRight && viewC < d.cols + 15) extendCols(10);
       });
 
+      formulaInput.addEventListener('focus', () => {
+        formulaBarSnapshot = getCellRaw(sel.r, sel.c);
+      });
       formulaInput.addEventListener('input', () => {
         if (editingTd) return;
         setCell(sel.r, sel.c, formulaInput.value, true);
-        recordSheet({ coalesce: true });
       });
       formulaInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); select(sel.r + 1, sel.c); focusGrid(); }
-        if (e.key === 'Escape') { formulaInput.value = getCellRaw(sel.r, sel.c); focusGrid(); }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          recordSheet();
+          formulaBarSnapshot = null;
+          select(sel.r + 1, sel.c);
+          focusGrid();
+        }
+        if (e.key === 'Escape') {
+          const snap = formulaBarSnapshot != null ? formulaBarSnapshot : getCellRaw(sel.r, sel.c);
+          setCell(sel.r, sel.c, snap, true);
+          formulaInput.value = snap;
+          recordSheet();
+          formulaBarSnapshot = null;
+          focusGrid();
+        }
+      });
+      formulaInput.addEventListener('blur', () => {
+        if (formulaBarSnapshot != null) recordSheet();
+        formulaBarSnapshot = null;
       });
       fxBtn.addEventListener('click', () => openFunctionWizard());
     }
@@ -2050,7 +2219,8 @@
               styles: s.styles || {},
               colWidths: s.colWidths || {},
               rowHeights: s.rowHeights || {},
-              charts: Array.isArray(s.charts) ? s.charts : []
+              charts: Array.isArray(s.charts) ? s.charts : [],
+              filterByCol: s.filterByCol || {}
             })),
           active: Math.min(doc.active || 0, (doc.sheets || []).length - 1 < 0 ? 0 : (doc.sheets || []).length - 1)
         };
@@ -2106,13 +2276,18 @@
             styles: sh.styles || {},
             colWidths: sh.colWidths || {},
             rowHeights: sh.rowHeights || {},
-            charts: sh.charts || []
+            charts: sh.charts || [],
+            filterByCol: sh.filterByCol || {}
           };
         });
         return { sheets, active: model.active };
       },
       focus() { focusGrid(); },
       destroy() {
+        if (onDocMouseUp) {
+          document.removeEventListener('mouseup', onDocMouseUp);
+          onDocMouseUp = null;
+        }
         if (gridScroll) gridScroll.removeEventListener('wheel', onCtrlWheel);
       },
       commands: {
@@ -2120,16 +2295,11 @@
         redo,
         canUndo: () => history.canUndo(),
         canRedo: () => history.canRedo(),
-        copy: () => { try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {} },
-        cut: () => {
-          try { navigator.clipboard.writeText(getCellRaw(sel.r, sel.c)); } catch {}
-          setCell(sel.r, sel.c, '');
-          formulaInput.value = '';
-        },
+        copy: () => { try { navigator.clipboard.writeText(copySelectionToTsv()); } catch {} },
+        cut: () => cutSelection(),
         paste: (t) => {
           if (t == null) return;
-          setCell(sel.r, sel.c, String(t).replace(/\r?\n$/, ''));
-          formulaInput.value = getCellRaw(sel.r, sel.c);
+          pasteTsv(t);
         },
         find: openFindModal,
         zoomIn: () => zoomBy(1.1),
@@ -2140,7 +2310,12 @@
         insertFx: openFunctionWizard,
         sortAsc: () => sortSelectedRange(true),
         sortDesc: () => sortSelectedRange(false),
-        toggleFilter: () => { autoFilterActive = !autoFilterActive; renderGrid(); recordSheet(); },
+        toggleFilter: () => {
+          autoFilterActive = !autoFilterActive;
+          if (!autoFilterActive) Object.keys(sheetFilters()).forEach((k) => delete sheetFilters()[k]);
+          renderGrid();
+          recordSheet();
+        },
         increaseFontSize: () => stepFontSize(1),
         decreaseFontSize: () => stepFontSize(-1),
         setColWidth: (w) => setColWidth(sel.c, w),
@@ -2162,7 +2337,9 @@
         addSheet: () => {
           model.sheets.push({ name: `Sheet${model.sheets.length + 1}`, rows: [], styles: {}, colWidths: {}, rowHeights: {}, charts: [] });
           renderTabs();
-        }
+        },
+        evalFormula: (expr, r, c) => evaluateFormula(expr, r || 0, c || 0),
+        sortRange: (asc) => sortSelectedRange(asc)
       }
     };
   }

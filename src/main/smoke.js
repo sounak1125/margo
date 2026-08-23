@@ -192,7 +192,113 @@ async function backendTests(samplesDir, tmpDir) {
     drafts.put({ id: 'smoke-draft-2', kind: 'md', name: 'a.md', path: null, updatedAt: 1, data: { markdown: 'x' } });
     drafts.clear();
     t('backend: drafts clear', drafts.list().length === 0);
+
+    const overwrite = drafts.put({
+      id: 'smoke-draft-overwrite',
+      kind: 'md',
+      name: 'first.md',
+      path: null,
+      updatedAt: 1,
+      data: { markdown: 'first' }
+    });
+    const overwrite2 = drafts.put({
+      id: 'smoke-draft-overwrite',
+      kind: 'md',
+      name: 'second.md',
+      path: null,
+      updatedAt: 2,
+      data: { markdown: 'second' }
+    });
+    const listedOverwrite = drafts.list().filter((d) => d.id === 'smoke-draft-overwrite');
+    t('backend: drafts overwrite same id',
+      overwrite && overwrite.ok && overwrite2 && overwrite2.ok
+        && listedOverwrite.length === 1 && listedOverwrite[0].data.markdown === 'second',
+      `n=${listedOverwrite.length} md=${listedOverwrite[0] && listedOverwrite[0].data.markdown}`);
+    drafts.remove('smoke-draft-overwrite');
   } catch (e) { t('backend: drafts put/list', false, e.message); }
+
+  try {
+    t('backend: shared formula normalizes to result',
+      files.normalizeCell({ sharedFormula: 'A1', result: 42 }) === '42'
+        && files.normalizeCell({ formula: 'SUM(A1:A3)', sharedFormula: 'A1' }) === '=SUM(A1:A3)');
+  } catch (e) { t('backend: shared formula normalizes to result', false, e.message); }
+
+  try {
+    const styledXlsx = path.join(tmpDir, 'styled-roundtrip.xlsx');
+    await files.save({
+      kind: 'sheet',
+      path: styledXlsx,
+      data: {
+        sheets: [{
+          name: 'Styled',
+          rows: [['', 'val']],
+          styles: {
+            '0,0': { fill: '#ffcc00', border: 'all' },
+            '0,1': { bold: true }
+          },
+          colWidths: {},
+          rowHeights: { 0: 48 }
+        }],
+        active: 0
+      }
+    });
+    const reopened = await files.openPath(styledXlsx);
+    const st = reopened.sheets[0].styles['0,0'] || {};
+    const height = reopened.sheets[0].rowHeights[0];
+    t('backend: xlsx empty styled cell + row height round trip',
+      reopened.kind === 'sheet'
+        && st.fill === '#ffcc00'
+        && st.border === 'all'
+        && height === 48,
+      `fill=${st.fill} border=${st.border} height=${height}`);
+  } catch (e) { t('backend: xlsx empty styled cell + row height round trip', false, e.message); }
+
+  try {
+    const widthXlsx = path.join(tmpDir, 'colwidth-roundtrip.xlsx');
+    await files.save({
+      kind: 'sheet',
+      path: widthXlsx,
+      data: {
+        sheets: [{ name: 'W', rows: [['wide column']], styles: {}, colWidths: { 0: 150 }, rowHeights: {} }],
+        active: 0
+      }
+    });
+    const reopened = await files.openPath(widthXlsx);
+    const w = reopened.sheets[0].colWidths[0];
+    t('backend: xlsx column width round trip', reopened.kind === 'sheet' && w >= 145 && w <= 155, `width=${w}`);
+  } catch (e) { t('backend: xlsx column width round trip', false, e.message); }
+
+  try {
+    const chartXlsx = path.join(tmpDir, 'chart-roundtrip.xlsx');
+    const charts = [{ id: 'c1', type: 'column', title: 'Sales', range: 'A1:B3', x: 10, y: 20, width: 300, height: 200 }];
+    await files.save({
+      kind: 'sheet',
+      path: chartXlsx,
+      data: {
+        sheets: [{ name: 'Data', rows: [['A', 'B'], ['1', '2']], styles: {}, colWidths: {}, rowHeights: {}, charts }],
+        active: 0
+      }
+    });
+    const reopened = await files.openPath(chartXlsx);
+    const back = reopened.sheets[0].charts || [];
+    t('backend: xlsx chart metadata round trip',
+      reopened.kind === 'sheet' && back.length === 1 && back[0].title === 'Sales' && back[0].type === 'column',
+      JSON.stringify(back));
+  } catch (e) { t('backend: xlsx chart metadata round trip', false, e.message); }
+
+  try {
+    const drafts = require('./drafts');
+    const recents = require('./recents');
+    recents.clear();
+    const offline = path.join(tmpDir, 'offline-missing.xlsx');
+    recents.add(offline, 'sheet');
+    const listed = recents.list();
+    const stored = JSON.parse(fs.readFileSync(path.join(require('electron').app.getPath('userData'), 'recents.json'), 'utf8'));
+    t('backend: recents keep missing files',
+      listed.length === 0 && stored.length === 1 && stored[0].path === offline,
+      `listed=${listed.length} stored=${stored.length}`);
+    recents.clear();
+  } catch (e) { t('backend: recents keep missing files', false, e.message); }
 }
 
 async function validateRendererArtifacts(tmpDir) {

@@ -209,8 +209,16 @@
       if (el && el.classList && el.classList.contains('doc-page')) activePage = el;
     }
 
+    function stripFindMarksFromClone(root) {
+      root.querySelectorAll('mark.margo-find-hit').forEach((m) => {
+        const parent = m.parentNode;
+        if (!parent) return;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        parent.removeChild(m);
+      });
+    }
+
     function serializeDoc() {
-      if (findOpen) unwrapFindMarks();
       const pages = pageList();
       const bodyHtmls = pages.map((p) => {
         const src = p.querySelector('.doc-page-body') || p;
@@ -221,6 +229,7 @@
           const f = clone.querySelector('.doc-page-footer');
           if (f) f.remove();
         }
+        stripFindMarksFromClone(clone);
         normalizeFonts(clone);
         return clone.innerHTML;
       });
@@ -300,6 +309,7 @@
       skipInputRecord = false;
       const body = getPage();
       if (body) body.focus();
+      if (findOpen && findInput && findInput.value) runFind(findInput.value);
     }
 
     /* Keystrokes must stay cheap. updateStatus() reads the whole document and

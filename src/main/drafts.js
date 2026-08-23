@@ -41,8 +41,17 @@ function put(raw) {
     const dest = fileFor(draft.id);
     const tmp = dest + '.tmp';
     fs.writeFileSync(tmp, json);
-    try { fs.unlinkSync(dest); } catch {}
-    fs.renameSync(tmp, dest);
+    try {
+      fs.renameSync(tmp, dest);
+    } catch (err) {
+      if (err.code === 'EEXIST' || err.code === 'EPERM') {
+        fs.copyFileSync(tmp, dest);
+        try { fs.unlinkSync(tmp); } catch {}
+      } else {
+        try { fs.unlinkSync(tmp); } catch {}
+        throw err;
+      }
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };

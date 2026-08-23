@@ -328,9 +328,20 @@ function attach({ disabled, userData }) {
       if (!fileId) return { ok: true, skipped: true };
       const token = await oauth.accessToken(cfg, store);
       let existing = null;
-      try { existing = await drive.getFile(token, fileId); } catch { existing = null; }
+      try {
+        existing = await drive.getFile(token, fileId);
+      } catch (err) {
+        if (err.status === 404) {
+          delete maps[key];
+          writeMap(getUserData(), maps);
+          return { ok: true, skipped: true };
+        }
+        throw err;
+      }
       if (!existing || existing.trashed) {
-        return { ok: false, error: 'Could not update Drive — use Share… to upload again.' };
+        delete maps[key];
+        writeMap(getUserData(), maps);
+        return { ok: true, skipped: true };
       }
       const buf = fs.readFileSync(filePath);
       const mime = drive.mimeOf(filePath);

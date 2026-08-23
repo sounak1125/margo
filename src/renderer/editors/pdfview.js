@@ -67,7 +67,9 @@
       cssScale = fitScale * zoom;
 
       for (let i = 1; i <= pdf.numPages; i++) {
+        if (destroyed) return;
         const page = await pdf.getPage(i);
+        if (destroyed) return;
         const vp1 = page.getViewport({ scale: 1 });
         const el = document.createElement('div');
         el.className = 'pdf-page';
@@ -90,14 +92,17 @@
 
     async function indexText() {
       textIndex = [];
-      if (!pdf) return;
+      if (!pdf || destroyed) return;
       for (let i = 0; i < pageViews.length; i++) {
+        if (destroyed) return;
         const page = pageViews[i].page;
         const tc = await page.getTextContent();
+        if (destroyed) return;
         let text = '';
         const items = [];
         (tc.items || []).forEach((item) => {
           if (typeof item.str !== 'string' || !item.str) return;
+          if (text.length && !/\s$/.test(text) && !/^\s/.test(item.str)) text += ' ';
           const start = text.length;
           text += item.str;
           items.push({ start, end: text.length, item });
@@ -178,23 +183,30 @@
     }
 
     async function renderPage(i) {
+      if (destroyed) return;
       const pv = pageViews[i];
       if (!pv || pv.rendered || pv.rendering) return;
       pv.rendering = true;
+      const scale = cssScale * dpr();
       try {
-        const scale = cssScale * dpr();
         const vp = pv.page.getViewport({ scale });
         pv.canvas.width = Math.floor(vp.width);
         pv.canvas.height = Math.floor(vp.height);
         pv.canvas.style.width = '100%';
         pv.canvas.style.height = '100%';
         await pv.page.render({ canvasContext: pv.canvas.getContext('2d'), viewport: vp }).promise;
-        pv.rendered = true;
-        pv.error = null;
+        if (destroyed || !pageViews[i]) return;
+        if (scale !== cssScale * dpr()) {
+          pv.rendered = false;
+        } else {
+          pv.rendered = true;
+          pv.error = null;
+        }
       } catch (e) {
-        pv.error = e && e.message;
+        if (!destroyed) pv.error = e && e.message;
       } finally {
         pv.rendering = false;
+        if (!destroyed && pageViews[i] && !pageViews[i].rendered) renderPage(i);
       }
     }
 
@@ -874,11 +886,15 @@
       },
       destroy() {
         destroyed = true;
+        pageViews = [];
+        textIndex = [];
+        textIndexPromise = null;
         if (host) host.removeEventListener('keydown', onHostKeydown);
         if (scroll) scroll.removeEventListener('wheel', onCtrlWheel);
         if (observer) observer.disconnect();
+        observer = null;
         closeFind();
-        if (pdf) { try { pdf.destroy(); } catch {} }
+        if (pdf) { try { pdf.destroy(); } catch {} pdf = null; }
       },
       _test: {
         numPages: () => (pdf ? pdf.numPages : 0),
