@@ -15,32 +15,23 @@
   const FONTS = window.MargoFonts;
   const FONT_FAMILIES = FONTS.FAMILIES;
   const FONT_SIZES = FONTS.SIZES;
-  const INK_COLORS = [
-    '#1d1d1f', '#4b5563', '#6b7280', '#9ca3af',
-    '#b42318', '#dc2626', '#ea580c', '#d97706',
-    '#16a34a', '#059669', '#0284c7', '#2563eb',
-    '#4f46e5', '#7c3aed', '#c026d3', '#db2777'
-  ];
-  /* Word and Google Docs highlight with saturated marker colours, and these
-     are the exact values Word's sixteen w:highlight names resolve to. The old
-     pastel set did not match anything a document arrived with, so the same
-     highlight looked like a different colour in Margo than everywhere else. */
-  const HL_COLORS = [
-    { name: 'Yellow', color: '#ffff00', class: 'hl-yellow' },
-    { name: 'Green', color: '#00ff00', class: 'hl-green' },
-    { name: 'Cyan', color: '#00ffff', class: 'hl-cyan' },
-    { name: 'Magenta', color: '#ff00ff', class: 'hl-pink' },
-    { name: 'Blue', color: '#0000ff', class: 'hl-blue' },
-    { name: 'Red', color: '#ff0000', class: 'hl-red' },
-    { name: 'Dark Yellow', color: '#808000', class: 'hl-darkyellow' },
-    { name: 'Purple', color: '#800080', class: 'hl-purple' },
-    { name: 'Grey', color: '#c0c0c0', class: 'hl-gray' }
-  ];
-  const SHADING_COLORS = [
-    '#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1',
-    '#fef2f2', '#fee2e2', '#fef3c7', '#fde68a', '#ecfdf5',
-    '#d1fae5', '#eff6ff', '#dbeafe', '#f5f3ff', '#ede9fe'
-  ];
+  const PICKER = window.MargoColorPicker;
+  /* Word names its highlights rather than storing a colour, so a highlight
+     that lands on one of those exact values keeps the matching class and
+     round-trips as that name. Every other colour is inline background only,
+     which is what Google Docs writes and what docx shading carries. */
+  const WORD_HL_CLASS = {
+    '#ffff00': 'hl-yellow',
+    '#00ff00': 'hl-green',
+    '#00ffff': 'hl-cyan',
+    '#ff00ff': 'hl-pink',
+    '#0000ff': 'hl-blue',
+    '#ff0000': 'hl-red',
+    '#ffa500': 'hl-orange',
+    '#808000': 'hl-darkyellow',
+    '#800080': 'hl-purple',
+    '#c0c0c0': 'hl-gray'
+  };
   const SYMBOL_CATEGORIES = [
     {
       title: 'Common & Punctuation',
@@ -468,18 +459,63 @@
       sel.addRange(savedRange);
     }
 
-    function applyTextHighlight(colorClass, hexColor) {
+    /* Clearing a highlight has to take the mark off and leave everything else
+       alone. execCommand('removeFormat') would also strip the bold, the font
+       and the text colour under the selection, which is not what "no
+       highlight" means anywhere else. */
+    function clearTextHighlight(range) {
+      const page = getPage();
+      if (!page) return;
+      const marks = [];
+      page.querySelectorAll('mark').forEach((m) => {
+        if (m.classList.contains('margo-find-hit')) return;
+        if (range.intersectsNode(m)) marks.push(m);
+      });
+      /* Unwrapping keeps the text nodes themselves, so a range pointing into
+         them survives. Merging those nodes afterwards would not, which is why
+         nothing is normalized here. */
+      marks.forEach((m) => {
+        const parent = m.parentNode;
+        if (!parent) return;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        parent.removeChild(m);
+      });
+    }
+
+    /* What the picker should show as already chosen. The computed style at the
+       caret is the only thing that accounts for colour inherited from a parent
+       span, which is how execCommand leaves it. */
+    function currentInlineColor(prop) {
+      const sel = window.getSelection();
+      const node = savedRange ? savedRange.startContainer
+        : (sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null);
+      if (!node) return '';
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      if (!el) return '';
+      const value = window.getComputedStyle(el)[prop];
+      if (prop === 'backgroundColor' && /^(transparent|rgba\(0, 0, 0, 0\))$/.test(value)) return '';
+      return value || '';
+    }
+
+    function applyTextHighlight(hexColor) {
       restoreSelection();
       const sel = window.getSelection();
       if (!sel.rangeCount || sel.isCollapsed) return;
       const range = sel.getRangeAt(0);
-      if (!colorClass || colorClass === 'none') {
-        exec('removeFormat');
+      const hex = hexColor ? PICKER.normalizeHex(hexColor) : null;
+      if (!hex) {
+        clearTextHighlight(range);
+        ctx.markDirty();
+        recordNow();
         return;
       }
+      /* Re-highlighting over an existing mark would nest one inside the other
+         and leave the old colour showing at the edges. */
+      clearTextHighlight(range);
       const mark = document.createElement('mark');
-      mark.className = colorClass;
-      mark.style.backgroundColor = hexColor;
+      const wordClass = WORD_HL_CLASS[hex];
+      if (wordClass) mark.className = wordClass;
+      mark.style.backgroundColor = hex;
       try {
         range.surroundContents(mark);
       } catch {
@@ -2851,26 +2887,15 @@
       colorBtn.innerHTML = '<span class="tb-glyph" style="border-bottom:3px solid #1d4ed8;line-height:1">A</span>';
       colorBtn.addEventListener('mousedown', (e) => { e.preventDefault(); saveSelection(); });
       colorBtn.addEventListener('click', () => {
-        const pal = document.createElement('div');
-        pal.className = 'color-pop';
-        INK_COLORS.forEach((cVal) => {
-          const sw = document.createElement('button');
-          sw.className = 'color-swatch';
-          sw.style.background = cVal;
-          sw.title = cVal;
-          sw.addEventListener('click', (e) => {
-            e.stopPropagation();
-            pal.remove();
+        PICKER.open(colorBtn, {
+          title: 'Text colour',
+          value: currentInlineColor('color'),
+          onPick: (hex) => {
+            if (!hex) return;
             restoreSelection();
-            exec('foreColor', cVal, true);
-          });
-          pal.appendChild(sw);
+            exec('foreColor', hex, true);
+          }
         });
-        colorBtn.appendChild(pal);
-        const dismiss = (e) => {
-          if (!pal.contains(e.target)) { pal.remove(); document.removeEventListener('mousedown', dismiss, true); }
-        };
-        setTimeout(() => document.addEventListener('mousedown', dismiss, true), 0);
       });
       pHome.appendChild(colorBtn);
 
@@ -2881,35 +2906,13 @@
       hlBtn.innerHTML = I.highlight || '<span class="tb-glyph" style="background:#fef08a;padding:0 2px">ab</span>';
       hlBtn.addEventListener('mousedown', (e) => { e.preventDefault(); saveSelection(); });
       hlBtn.addEventListener('click', () => {
-        const pal = document.createElement('div');
-        pal.className = 'color-pop';
-        HL_COLORS.forEach((h) => {
-          const sw = document.createElement('button');
-          sw.className = 'color-swatch';
-          sw.style.background = h.color;
-          sw.title = h.name;
-          sw.addEventListener('click', (e) => {
-            e.stopPropagation();
-            pal.remove();
-            applyTextHighlight(h.class, h.color);
-          });
-          pal.appendChild(sw);
+        PICKER.open(hlBtn, {
+          title: 'Highlight colour',
+          allowNone: true,
+          noneLabel: 'No highlight',
+          value: currentInlineColor('backgroundColor'),
+          onPick: (hex) => applyTextHighlight(hex)
         });
-        const clearSw = document.createElement('button');
-        clearSw.className = 'color-swatch';
-        clearSw.textContent = '✕';
-        clearSw.title = 'No Highlight';
-        clearSw.addEventListener('click', (e) => {
-          e.stopPropagation();
-          pal.remove();
-          applyTextHighlight('none');
-        });
-        pal.appendChild(clearSw);
-        hlBtn.appendChild(pal);
-        const dismiss = (e) => {
-          if (!pal.contains(e.target)) { pal.remove(); document.removeEventListener('mousedown', dismiss, true); }
-        };
-        setTimeout(() => document.addEventListener('mousedown', dismiss, true), 0);
       });
       pHome.appendChild(hlBtn);
 
@@ -2997,24 +3000,13 @@
       shadeBtn.title = 'Cell shading background';
       shadeBtn.innerHTML = I.shading || '🎨';
       shadeBtn.addEventListener('click', () => {
-        const pal = document.createElement('div');
-        pal.className = 'color-pop';
-        SHADING_COLORS.forEach((cVal) => {
-          const sw = document.createElement('button');
-          sw.className = 'color-swatch';
-          sw.style.background = cVal;
-          sw.addEventListener('click', (e) => {
-            e.stopPropagation();
-            pal.remove();
-            setTableCellShading(cVal);
-          });
-          pal.appendChild(sw);
+        PICKER.open(shadeBtn, {
+          title: 'Cell shading',
+          allowNone: true,
+          noneLabel: 'No fill',
+          value: (selectionInTable() || {}).cell ? selectionInTable().cell.style.backgroundColor : '',
+          onPick: (hex) => setTableCellShading(hex || '')
         });
-        shadeBtn.appendChild(pal);
-        setTimeout(() => {
-          const dismiss = (e) => { if (!pal.contains(e.target)) { pal.remove(); document.removeEventListener('mousedown', dismiss, true); } };
-          document.addEventListener('mousedown', dismiss, true);
-        }, 0);
       });
       pInsert.appendChild(shadeBtn);
       tableBtns.shade = shadeBtn;

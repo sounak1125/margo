@@ -8,17 +8,7 @@
   const FONTS = window.MargoFonts;
   const FONT_FAMILIES = FONTS.FAMILIES;
   const FONT_SIZES = FONTS.SIZES;
-  const FILL_COLORS = [
-    '#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1',
-    '#fef2f2', '#fee2e2', '#fef3c7', '#fde68a', '#ecfdf5',
-    '#d1fae5', '#eff6ff', '#dbeafe', '#f5f3ff', '#ede9fe'
-  ];
-  const TEXT_COLORS = [
-    '#1d1d1f', '#4b5563', '#6b7280', '#9ca3af',
-    '#b42318', '#dc2626', '#ea580c', '#d97706',
-    '#16a34a', '#059669', '#0284c7', '#2563eb',
-    '#4f46e5', '#7c3aed', '#c026d3', '#db2777'
-  ];
+  const PICKER = window.MargoColorPicker;
 
   function colName(n) {
     let s = '';
@@ -882,8 +872,10 @@
       if (st.align) td.classList.add(`cell-align-${st.align}`);
       if (st.valign) td.classList.add(`cell-valign-${st.valign}`);
       if (st.border) td.classList.add(`border-${st.border}`);
-      if (st.fill) td.style.backgroundColor = st.fill;
-      if (st.color) td.style.color = st.color;
+      /* Assigned either way: a td that survives a re-render would otherwise
+         keep the fill or colour the cell no longer has. */
+      td.style.backgroundColor = st.fill || '';
+      td.style.color = st.color || '';
       const family = st.font || 'Calibri';
       td.style.fontFamily = FONTS.fontFamilyCss(
         family,
@@ -1072,6 +1064,12 @@
     }
 
     /* ---------- Formatting & Styling Operations ---------- */
+    /* The anchor cell's own style, so the picker can tick whatever the cell is
+       already wearing. */
+    function cellStyle() {
+      return ((sheet().styles || {})[`${sel.r},${sel.c}`]) || {};
+    }
+
     function applyStyleToSelection(stylePatch) {
       const minR = selEnd ? Math.min(sel.r, selEnd.r) : sel.r;
       const maxR = selEnd ? Math.max(sel.r, selEnd.r) : sel.r;
@@ -1698,24 +1696,13 @@
       fillBtn.title = 'Cell Fill Color';
       fillBtn.innerHTML = I.shading || '🎨';
       fillBtn.addEventListener('click', () => {
-        const pal = document.createElement('div');
-        pal.className = 'color-pop';
-        FILL_COLORS.forEach((c) => {
-          const sw = document.createElement('button');
-          sw.className = 'color-swatch';
-          sw.style.background = c;
-          sw.addEventListener('click', (e) => {
-            e.stopPropagation();
-            pal.remove();
-            applyStyleToSelection({ fill: c });
-          });
-          pal.appendChild(sw);
+        PICKER.open(fillBtn, {
+          title: 'Fill colour',
+          allowNone: true,
+          noneLabel: 'No fill',
+          value: cellStyle().fill,
+          onPick: (hex) => applyStyleToSelection({ fill: hex || '' })
         });
-        fillBtn.appendChild(pal);
-        setTimeout(() => {
-          const dismiss = (e) => { if (!pal.contains(e.target)) { pal.remove(); document.removeEventListener('mousedown', dismiss, true); } };
-          document.addEventListener('mousedown', dismiss, true);
-        }, 0);
       });
       pHome.appendChild(fillBtn);
 
@@ -1725,24 +1712,11 @@
       colorBtn.title = 'Font Color';
       colorBtn.innerHTML = '<span class="tb-glyph" style="border-bottom:3px solid #1d4ed8;line-height:1">A</span>';
       colorBtn.addEventListener('click', () => {
-        const pal = document.createElement('div');
-        pal.className = 'color-pop';
-        TEXT_COLORS.forEach((c) => {
-          const sw = document.createElement('button');
-          sw.className = 'color-swatch';
-          sw.style.background = c;
-          sw.addEventListener('click', (e) => {
-            e.stopPropagation();
-            pal.remove();
-            applyStyleToSelection({ color: c });
-          });
-          pal.appendChild(sw);
+        PICKER.open(colorBtn, {
+          title: 'Font colour',
+          value: cellStyle().color,
+          onPick: (hex) => { if (hex) applyStyleToSelection({ color: hex }); }
         });
-        colorBtn.appendChild(pal);
-        setTimeout(() => {
-          const dismiss = (e) => { if (!pal.contains(e.target)) { pal.remove(); document.removeEventListener('mousedown', dismiss, true); } };
-          document.addEventListener('mousedown', dismiss, true);
-        }, 0);
       });
       pHome.appendChild(colorBtn);
 

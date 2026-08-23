@@ -203,6 +203,137 @@
       page.insertAdjacentHTML('beforeend', '<p>Doc smoke edit.</p>');
       page.dispatchEvent(new Event('input', { bubbles: true }));
       t('doc edit marks dirty', T.state.dirty === true);
+      // colour picker: palette, custom hex, highlight, and clearing
+      {
+        const PICKER = window.MargoColorPicker;
+        const colorBtn = document.querySelector('.tab-pane:not([hidden]) .tb-color')
+          || document.querySelector('.tb-color');
+        const hlBtn = document.querySelector('.tab-pane:not([hidden]) .tb-hl')
+          || document.querySelector('.tb-hl');
+        t('doc colour picker module loaded', !!(PICKER && typeof PICKER.open === 'function'));
+        t('doc colour palette is the full grid',
+          !!PICKER && PICKER.PALETTE.length === 8 && PICKER.PALETTE.every((r) => r.length === 10),
+          PICKER ? `${PICKER.PALETTE.length} rows` : 'no picker');
+
+        if (colorBtn) {
+          colorBtn.click();
+          await wait(30);
+          const pop = document.querySelector('.mc-pop');
+          t('doc text colour picker opens', !!pop);
+          t('doc picker offers 80 swatches',
+            !!pop && pop.querySelectorAll('.mc-grid .mc-swatch').length === 80,
+            pop ? String(pop.querySelectorAll('.mc-grid .mc-swatch').length) : 'no pop');
+          t('doc picker has custom hex + wheel',
+            !!pop && !!pop.querySelector('.mc-hex') && !!pop.querySelector('.mc-native'));
+          /* The eyedropper is Chromium's, so the button is expected exactly
+             where the API is - present under Electron, absent without it. */
+          t('doc picker eyedropper matches API support',
+            !!pop && (!!pop.querySelector('.mc-eyedrop') === PICKER.eyedropperSupported()),
+            `api=${PICKER.eyedropperSupported()} btn=${!!(pop && pop.querySelector('.mc-eyedrop'))}`);
+          PICKER.close();
+          t('doc picker closes', !document.querySelector('.mc-pop'));
+        }
+
+        const target = page.querySelector('p') || page;
+        const selectTarget = () => {
+          const r = document.createRange();
+          r.selectNodeContents(target);
+          const s2 = window.getSelection();
+          s2.removeAllRanges(); s2.addRange(r);
+        };
+
+        // a palette colour off the Google grid, applied through the real button
+        if (colorBtn) {
+          selectTarget();
+          colorBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          colorBtn.click();
+          await wait(30);
+          const sw = document.querySelector('.mc-pop .mc-grid .mc-swatch[title="#1155cc"]');
+          if (sw) sw.click();
+          await wait(30);
+          const html = (await Promise.resolve(T.getEditor().getData())).html;
+          t('doc palette colour applies to text',
+            /(#1155cc|rgb\(17,\s*85,\s*204\))/i.test(html), html.slice(0, 200));
+        }
+
+        // custom hex through the picker's own field
+        if (colorBtn) {
+          selectTarget();
+          colorBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          colorBtn.click();
+          await wait(30);
+          const plus = document.querySelector('.mc-pop .mc-plus');
+          if (plus) plus.click();
+          await wait(20);
+          const hexField = document.querySelector('.mc-pop .mc-hex');
+          const apply = document.querySelector('.mc-pop .mc-apply');
+          if (hexField && apply) {
+            hexField.value = '#7ab648';
+            hexField.dispatchEvent(new Event('input', { bubbles: true }));
+            apply.click();
+          }
+          await wait(30);
+          const html = (await Promise.resolve(T.getEditor().getData())).html;
+          t('doc custom hex applies to text',
+            /(#7ab648|rgb\(122,\s*182,\s*72\))/i.test(html), html.slice(0, 200));
+          t('doc custom colour lands in recents',
+            PICKER.readRecents().includes('#7ab648'), PICKER.readRecents().join(','));
+        }
+
+        // highlight: a Word colour keeps its class, an off-grid one does not
+        if (hlBtn) {
+          selectTarget();
+          hlBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hlBtn.click();
+          await wait(30);
+          const yellow = document.querySelector('.mc-pop .mc-grid .mc-swatch[title="#ffff00"]');
+          if (yellow) yellow.click();
+          await wait(30);
+          const mark = page.querySelector('mark');
+          t('doc highlight wraps selection in a mark', !!mark);
+          t('doc word highlight keeps its class',
+            !!mark && mark.classList.contains('hl-yellow'), mark ? mark.className : 'no mark');
+
+          selectTarget();
+          hlBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hlBtn.click();
+          await wait(30);
+          const teal = document.querySelector('.mc-pop .mc-grid .mc-swatch[title="#45818e"]');
+          if (teal) teal.click();
+          await wait(30);
+          const custom = page.querySelector('mark');
+          t('doc off-grid highlight is inline only',
+            !!custom && !custom.className && /69,\s*129,\s*142|#45818e/i.test(custom.style.backgroundColor),
+            custom ? `${custom.className}|${custom.style.backgroundColor}` : 'no mark');
+          t('doc highlight does not nest marks',
+            page.querySelectorAll('mark mark').length === 0,
+            String(page.querySelectorAll('mark mark').length));
+
+          // clearing the highlight must not take the bold with it
+          target.innerHTML = '<b>Bold under highlight</b>';
+          selectTarget();
+          hlBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hlBtn.click();
+          await wait(30);
+          const anyHl = document.querySelector('.mc-pop .mc-grid .mc-swatch[title="#ffff00"]');
+          if (anyHl) anyHl.click();
+          await wait(30);
+          selectTarget();
+          hlBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hlBtn.click();
+          await wait(30);
+          const none = document.querySelector('.mc-pop .mc-none');
+          t('doc highlight picker offers no-highlight', !!none);
+          if (none) none.click();
+          await wait(30);
+          t('doc no-highlight removes the mark', !target.querySelector('mark'), target.innerHTML.slice(0, 120));
+          t('doc no-highlight keeps other formatting',
+            !!target.querySelector('b') || /<strong/i.test(target.innerHTML),
+            target.innerHTML.slice(0, 120));
+        }
+        PICKER.close();
+      }
+
       const edDoc = T.getEditor();
       if (edDoc && edDoc.commands && edDoc.commands.addPage) edDoc.commands.addPage();
       await wait(80);
