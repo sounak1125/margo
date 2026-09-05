@@ -154,6 +154,15 @@
 
   let modalResolve = null;
   function openModal(title, bodyEl, actions, opts) {
+    /* A second modal opening over the first replaced the resolver, and
+       whoever was awaiting the first one then waited for a promise nothing
+       could ever settle. Answer it as though it had been dismissed, before
+       taking the screen off it. */
+    if (modalResolve) {
+      const orphaned = modalResolve;
+      modalResolve = null;
+      orphaned(null);
+    }
     els.modal.classList.toggle('wide', !!(opts && opts.wide));
     els.modalTitle.textContent = title;
     els.modalBody.innerHTML = '';
@@ -332,11 +341,17 @@
       const span = zoomMax - zoomMin;
       return +(zoomMin + (Number(v) / 100) * span).toFixed(4);
     }
+    /* The dismiss listener used to take itself off only when it was the thing
+       that closed the popup, so closing it any other way - picking a preset,
+       or the tab being torn down - left it on the document holding the popup
+       alive for the life of the window. */
     function closePresetPop() {
-      if (presetPop) {
-        presetPop.remove();
-        presetPop = null;
+      if (!presetPop) return;
+      if (presetPop.margoDismiss) {
+        document.removeEventListener('mousedown', presetPop.margoDismiss, true);
       }
+      presetPop.remove();
+      presetPop = null;
     }
     function emitZoom(z) {
       if (syncing || !zoomHandler) return;
@@ -391,9 +406,12 @@
       const onDoc = (ev) => {
         if (pop.contains(ev.target) || ev.target === pctBtn) return;
         closePresetPop();
-        document.removeEventListener('mousedown', onDoc, true);
       };
-      setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+      pop.margoDismiss = onDoc;
+      setTimeout(() => {
+        if (presetPop !== pop) return;
+        document.addEventListener('mousedown', onDoc, true);
+      }, 0);
     });
 
     const api = {
@@ -1286,9 +1304,24 @@
       els.homeTiles.appendChild(tile);
     });
   }
+  /* Each cached thumbnail holds a blob alive until its URL is revoked, and
+     nothing revoked the ones for files that had left the list - so clearing
+     recents, or opening enough files to push the old ones off the end, leaked
+     a card-sized image apiece for the life of the window. Pruned before the
+     render, which only ever draws paths that are still in the list. */
+  function pruneThumbUrls(list) {
+    const live = new Set(list.map((r) => String(r.path).toLowerCase()));
+    for (const [key, url] of thumbBlobUrls) {
+      if (live.has(key)) continue;
+      URL.revokeObjectURL(url);
+      thumbBlobUrls.delete(key);
+    }
+  }
+
   async function loadRecents() {
     const list = await window.margo.recents.list();
     lastRecents = list;
+    pruneThumbUrls(list);
     renderSidebarRecents(list);
     renderHomeTiles(list);
     markActiveRecent();
@@ -2354,6 +2387,8 @@
     loadRecents,
     applyTheme,
     toast,
+    openModal,
+    closeModal,
     showSettings,
     shareDoc,
     flushDrafts: flushAllDrafts,

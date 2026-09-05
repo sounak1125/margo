@@ -91,6 +91,7 @@ function writeStore(userData, data) {
 }
 
 function clearStore(userData) {
+  forgetTokenClient();
   try { fs.unlinkSync(tokenFile(userData)); } catch {}
 }
 
@@ -247,10 +248,32 @@ async function signInWithBrowser(cfg) {
   return done;
 }
 
+/* google-auth-library hands back the access token it already holds until that
+   token expires, but only from the same client - and a fresh one was built for
+   every call, so every save, every Drive push and every listing spent a
+   round trip to Google refreshing a token that was still perfectly good. The
+   client is kept and reused; a different account or client id builds a new
+   one, so signing out and back in cannot reuse the old credentials. */
+let tokenClient = null;
+let tokenClientKey = '';
+
+function clientFor(cfg, store) {
+  const key = cfg.client_id + '::' + store.refreshToken;
+  if (!tokenClient || tokenClientKey !== key) {
+    tokenClient = makeClient(cfg, 'http://127.0.0.1');
+    tokenClient.setCredentials({ refresh_token: store.refreshToken });
+    tokenClientKey = key;
+  }
+  return tokenClient;
+}
+
+function forgetTokenClient() {
+  tokenClient = null;
+  tokenClientKey = '';
+}
+
 async function accessToken(cfg, store) {
-  const client = makeClient(cfg, 'http://127.0.0.1');
-  client.setCredentials({ refresh_token: store.refreshToken });
-  const tok = await client.getAccessToken();
+  const tok = await clientFor(cfg, store).getAccessToken();
   const token = typeof tok === 'string' ? tok : (tok && tok.token);
   if (!token) throw new Error('Could not refresh Google access token.');
   return token;

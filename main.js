@@ -344,7 +344,13 @@ function thumbFile(filePath) {
    to load the next document, and javascript stays off - this is sanitized
    document HTML that only has to lay out. */
 let thumbWin = null;
-let thumbSeq = 0;
+/* Scratch files main writes for a window to load. Date.now() alone gave two
+   exports or prints started in the same millisecond the same path, and the
+   first one to finish deleted the file the second was still loading. */
+let tmpSeq = 0;
+function tempPath(prefix, ext) {
+  return path.join(app.getPath('temp'), `${prefix}-${process.pid}-${tmpSeq++}.${ext}`);
+}
 
 function thumbWindow(width, height) {
   if (thumbWin && !thumbWin.isDestroyed()) {
@@ -389,7 +395,7 @@ function queueThumbJob(job) {
 ipcMain.handle('thumbs:render-html', (_e, req) => queueThumbJob(async () => {
   const width = Math.max(1, Math.round((req && req.width) || 440));
   const height = Math.max(1, Math.round((req && req.height) || 568));
-  const tmp = path.join(app.getPath('temp'), `margo-thumb-${process.pid}-${thumbSeq++}.html`);
+  const tmp = tempPath('margo-thumb', 'html');
   try {
     await fs.promises.writeFile(tmp, String((req && req.html) || ''), 'utf8');
     const w = thumbWindow(width, height);
@@ -454,6 +460,25 @@ function safeImageName(suggested, fallbackStem, mime) {
   return (stem || fallbackStem) + '.' + imageExt(mime);
 }
 
+/* Exporting twice into the same folder used to write straight over the first
+   export, and any file of the author's that happened to share a name went with
+   it, silently - the count came back as though everything had been written.
+   A name already taken gets a number instead, the way a browser download does.
+   `taken` covers names claimed earlier in this same export, which are not on
+   disk yet when the next one is chosen. */
+function uniqueFilePath(dir, fileName, taken) {
+  const ext = path.extname(fileName);
+  const stem = path.basename(fileName, ext);
+  let candidate = fileName;
+  let n = 1;
+  while (taken.has(candidate.toLowerCase()) || fs.existsSync(path.join(dir, candidate))) {
+    n += 1;
+    candidate = `${stem} (${n})${ext}`;
+  }
+  taken.add(candidate.toLowerCase());
+  return path.join(dir, candidate);
+}
+
 ipcMain.handle('image:save-as', async (_e, { dataUrl, suggestedName }) => {
   const m = /^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/.exec(dataUrl || '');
   if (!m) return { ok: false, error: 'Bad image data' };
@@ -480,15 +505,17 @@ ipcMain.handle('images:export-folder', async (_e, { images }) => {
   });
   if (res.canceled || !res.filePaths || !res.filePaths[0]) return { canceled: true };
   const targetDir = res.filePaths[0];
+  const taken = new Set();
   let saved = 0;
   for (let i = 0; i < images.length; i++) {
     const im = images[i];
     const m = /^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/.exec(im.dataUrl || '');
     if (!m) continue;
-    const filePath = path.join(targetDir, safeImageName(im.name, `doc-image-${i + 1}`, m[1]));
+    const name = safeImageName(im.name, `doc-image-${i + 1}`, m[1]);
     /* safeImageName leaves nothing that could climb out, so this only ever
        fires if that changes. Skipping beats writing outside the folder. */
-    if (path.dirname(path.resolve(filePath)) !== path.resolve(targetDir)) continue;
+    if (path.dirname(path.resolve(path.join(targetDir, name))) !== path.resolve(targetDir)) continue;
+    const filePath = uniqueFilePath(targetDir, name, taken);
     await fs.promises.writeFile(filePath, Buffer.from(m[2], 'base64'));
     saved++;
   }
@@ -504,7 +531,7 @@ function hiddenPrintWindow(webPreferences) {
 }
 
 async function withHtmlPrintWindow(html, fn) {
-  const tmp = path.join(app.getPath('temp'), `margo-print-${Date.now()}.html`);
+  const tmp = tempPath('margo-print', 'html');
   fs.writeFileSync(tmp, html);
   const printWin = hiddenPrintWindow({ javascript: false });
   try {
@@ -567,7 +594,7 @@ ipcMain.handle('print:document', async (_e, req) => {
       let filePath = req.path;
       let tmp = null;
       if ((!filePath || !fs.existsSync(filePath)) && req.data && req.data.base64) {
-        tmp = path.join(app.getPath('temp'), `margo-print-${Date.now()}.pdf`);
+        tmp = tempPath('margo-print', 'pdf');
         fs.writeFileSync(tmp, Buffer.from(req.data.base64, 'base64'));
         filePath = tmp;
       }

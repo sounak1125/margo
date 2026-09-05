@@ -869,6 +869,51 @@
       ed._test.setCell(30, 7, '');
       ed._test.setCell(31, 7, '');
 
+      /* AutoSum on the top row built =SUM(A1:A0), a reversed range that takes
+         in the cell being written, so it came back #CIRCULAR! and showed 0.
+         It now adds up the cells to the left, as a spreadsheet does. */
+      ed._test.setCell(0, 10, '1');
+      ed._test.setCell(0, 11, '2');
+      ed._test.setCell(0, 12, '3');
+      ed._test.select(0, 13);
+      ed._test.autoSum();
+      t('autosum on the top row adds the row', ed._test.getFormatted(0, 13) === '6',
+        `${ed._test.getCell(0, 13)} => ${ed._test.getFormatted(0, 13)}`);
+      ed._test.setCell(1, 10, '10');
+      ed._test.select(2, 10);
+      ed._test.autoSum();
+      t('autosum below the top row adds the column', ed._test.getFormatted(2, 10) === '11',
+        `${ed._test.getCell(2, 10)} => ${ed._test.getFormatted(2, 10)}`);
+      [[0, 10], [0, 11], [0, 12], [0, 13], [1, 10], [2, 10]].forEach(([r, c]) => ed._test.setCell(r, c, ''));
+
+      t('MOD by zero is an error, not zero', ed._test.evalFormula('=MOD(10,0)') === '#DIV/0!',
+        String(ed._test.evalFormula('=MOD(10,0)')));
+
+      /* setCell repainted every cell on screen, so a paste did that once per
+         pasted cell - a hundred cells meant a hundred passes over the whole
+         grid. The bulk callers now repaint once at the end. */
+      const pasteRows = 40;
+      const pasteCols = 8;
+      const tsv = Array.from({ length: pasteRows }, (_, r) =>
+        Array.from({ length: pasteCols }, (_, c) => String(r * pasteCols + c)).join('\t')).join('\n');
+      ed._test.select(40, 0);
+      const repaintsBefore = ed._test.recalcCount();
+      const pasteStart = performance.now();
+      ed.commands.paste(tsv);
+      const pasteMs = Math.round(performance.now() - pasteStart);
+      const repaints = ed._test.recalcCount() - repaintsBefore;
+      const pastedOk = ed._test.getCell(40, 0) === '0'
+        && ed._test.getCell(40, 7) === '7'
+        && ed._test.getCell(79, 7) === String(pasteRows * pasteCols - 1);
+      t('paste writes every cell it was given', pastedOk,
+        `[0,0]=${ed._test.getCell(40, 0)} [39,7]=${ed._test.getCell(79, 7)}`);
+      t('paste repaints once, not once per cell', repaints === 1,
+        `${repaints} repaints for ${pasteRows * pasteCols} cells, ${pasteMs}ms`);
+      for (let r = 40; r < 40 + pasteRows; r++) {
+        for (let c = 0; c < pasteCols; c++) ed._test.setCell(r, c, '');
+      }
+      ed._test.select(0, 0);
+
       // Test cell sizing and text size
       ed._test.setColWidth(0, 150);
       t('sheet col width resized', ed._test.getColWidth(0) === 150);
@@ -1060,6 +1105,30 @@
         `${okCount}/4 :: ${overlapping.map((res) => (res && res.ok ? 'ok' : (res && res.error) || 'fail')).join(' | ')}`);
       t('overlapping thumbnail renders return their own card', distinct === 4,
         `${distinct} distinct of ${okCount}`);
+
+      /* A second modal opening over the first replaced the resolver, so
+         whoever was awaiting the first waited on a promise nothing could
+         settle - showShareModal and showOpenFromDrive both await theirs. */
+      {
+        let firstSettled = false;
+        const firstBody = document.createElement('div');
+        firstBody.textContent = 'first';
+        const firstModal = T.openModal('First', firstBody, [{ label: 'Close', value: 'first-closed' }]);
+        firstModal.then(() => { firstSettled = true; });
+        await wait(40);
+        const secondBody = document.createElement('div');
+        secondBody.textContent = 'second';
+        const secondModal = T.openModal('Second', secondBody, [{ label: 'Close', value: 'second-closed' }]);
+        await wait(60);
+        t('a modal opening over another settles the first', firstSettled,
+          firstSettled ? '' : 'first modal promise never resolved');
+        const closeSecond = [...document.querySelectorAll('#modal-actions .btn')]
+          .find((b) => b.textContent === 'Close');
+        if (closeSecond) closeSecond.click();
+        t('the modal on top still answers with its own value',
+          (await secondModal) === 'second-closed');
+        await wait(40);
+      }
     } catch (err) {
       t('suite crashed', false, err.stack || err.message);
     }

@@ -89,7 +89,11 @@
     ABS: (args) => Math.abs(toNum(args[0]) || 0),
     SQRT: (args) => Math.sqrt(toNum(args[0]) || 0),
     POWER: (args) => Math.pow(toNum(args[0]) || 0, toNum(args[1]) || 0),
-    MOD: (args) => (toNum(args[0]) || 0) % (toNum(args[1]) || 1),
+    MOD: (args) => {
+      // A zero divisor fell through to `|| 1`, which quietly answered 0.
+      const divisor = toNum(args[1]) || 0;
+      return divisor === 0 ? '#DIV/0!' : (toNum(args[0]) || 0) % divisor;
+    },
     INT: (args) => Math.floor(toNum(args[0]) || 0),
     MEDIAN: (args) => {
       const list = flatten(args).map(toNum).filter((n) => n != null).sort((a, b) => a - b);
@@ -822,14 +826,33 @@
       while (row.length <= c) row.push('');
       row[c] = value;
 
+      ctx.markDirty();
+      if (bulkEdit) return;
       recalculateGrid();
       if (autoFilterActive) refreshFilterVisibility();
-      ctx.markDirty();
       updateStatus();
       if (!skipUndo) recordSheet();
     }
 
+    /* recalculateGrid re-evaluates every cell on screen - up to 250 by 60 -
+       and setCell ran it per cell, so pasting a block or clearing a selection
+       did that once for every cell it touched: a hundred pasted cells meant a
+       hundred full passes over fifteen thousand. The bulk callers hold it off
+       and repaint once at the end. */
+    let bulkEdit = 0;
+
+    function withBulkEdit(fn) {
+      bulkEdit++;
+      try { fn(); } finally { bulkEdit--; }
+      recalculateGrid();
+      if (autoFilterActive) refreshFilterVisibility();
+      updateStatus();
+    }
+
+    let recalcCount = 0;
+
     function recalculateGrid() {
+      recalcCount++;
       for (let r = 0; r < viewR; r++) {
         for (let c = 0; c < viewC; c++) {
           const td = tdAt(r, c);
@@ -2037,7 +2060,7 @@
 
       // AutoSum, Sort & Find
       makeBtn(pHome, 'AutoSum (SUM)', I.autosum || 'Σ', () => {
-        setCell(sel.r, sel.c, `=SUM(${colName(sel.c)}1:${colName(sel.c)}${sel.r})`);
+        autoSum();
       });
       makeBtn(pHome, 'Sort Ascending', I.sortAZ || 'A-Z', () => sortSelectedRange(true));
       makeBtn(pHome, 'Sort Descending', I.sortZA || 'Z-A', () => sortSelectedRange(false));
@@ -2063,7 +2086,7 @@
 
       makeBtn(pFormulas, 'Insert Function (fx)', I.fx || 'fx', () => openFunctionWizard());
       makeBtn(pFormulas, 'AutoSum', I.autosum || 'Σ', () => {
-        setCell(sel.r, sel.c, `=SUM(${colName(sel.c)}1:${colName(sel.c)}${sel.r})`);
+        autoSum();
       });
 
       makeSep(pFormulas);
@@ -2118,6 +2141,23 @@
       makeBtn(pView, 'Shorter Row', '<span class="tb-glyph">Row-</span>', () => setRowHeight(sel.r, getRowHeight(sel.r) - 8));
     }
 
+    /* On the top row there is nothing above to add up, and =SUM(A1:A0) is a
+       reversed range that takes in the very cell being written - it came back
+       #CIRCULAR! and showed 0. Fall back to the cells on the left, which is
+       what a spreadsheet does in the top row. */
+    function autoSum() {
+      const col = colName(sel.c);
+      if (sel.r > 0) {
+        setCell(sel.r, sel.c, `=SUM(${col}1:${col}${sel.r})`);
+        return;
+      }
+      if (sel.c > 0) {
+        setCell(sel.r, sel.c, `=SUM(${colName(0)}1:${colName(sel.c - 1)}1)`);
+        return;
+      }
+      ctx.toast('Nothing above or to the left of A1 to add up');
+    }
+
     function selectionBounds() {
       const minR = selEnd ? Math.min(sel.r, selEnd.r) : sel.r;
       const maxR = selEnd ? Math.max(sel.r, selEnd.r) : sel.r;
@@ -2140,14 +2180,15 @@
     function pasteTsv(text) {
       const { minR, minC } = selectionBounds();
       const rows = String(text).replace(/\r?\n$/, '').split(/\r?\n/);
-      rows.forEach((line, dr) => {
-        line.split('\t').forEach((val, dc) => {
-          setCell(minR + dr, minC + dc, val, true);
+      withBulkEdit(() => {
+        rows.forEach((line, dr) => {
+          line.split('\t').forEach((val, dc) => {
+            setCell(minR + dr, minC + dc, val, true);
+          });
         });
       });
       recordSheet();
       formulaInput.value = getCellRaw(sel.r, sel.c);
-      recalculateGrid();
       ctx.markDirty();
     }
 
@@ -2155,12 +2196,13 @@
       const text = copySelectionToTsv();
       try { navigator.clipboard.writeText(text); } catch {}
       const { minR, maxR, minC, maxC } = selectionBounds();
-      for (let r = minR; r <= maxR; r++) {
-        for (let c = minC; c <= maxC; c++) setCell(r, c, '', true);
-      }
+      withBulkEdit(() => {
+        for (let r = minR; r <= maxR; r++) {
+          for (let c = minC; c <= maxC; c++) setCell(r, c, '', true);
+        }
+      });
       recordSheet();
       formulaInput.value = getCellRaw(sel.r, sel.c);
-      recalculateGrid();
       ctx.markDirty();
     }
 
@@ -2294,12 +2336,14 @@
             const minR = Math.min(sel.r, selEnd.r), maxR = Math.max(sel.r, selEnd.r);
             const minC = Math.min(sel.c, selEnd.c), maxC = Math.max(sel.c, selEnd.c);
             let changed = false;
-            for (let r = minR; r <= maxR; r++) {
-              for (let c = minC; c <= maxC; c++) {
-                if (getCellRaw(r, c) !== '') changed = true;
-                setCell(r, c, '', true);
+            withBulkEdit(() => {
+              for (let r = minR; r <= maxR; r++) {
+                for (let c = minC; c <= maxC; c++) {
+                  if (getCellRaw(r, c) !== '') changed = true;
+                  setCell(r, c, '', true);
+                }
               }
-            }
+            });
             if (changed) recordSheet();
           } else {
             setCell(sel.r, sel.c, '');
@@ -2510,6 +2554,9 @@
           renderTabs();
         },
         evalFormula: (expr, r, c) => evaluateFormula(expr, r || 0, c || 0),
+        select: (r, c) => select(r, c),
+        recalcCount: () => recalcCount,
+        autoSum: () => autoSum(),
         sortRange: (asc) => sortSelectedRange(asc),
         sortRangeCells: (startR, endR, col, asc) => {
           selectRange(startR, col, endR, col);

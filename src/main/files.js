@@ -1223,7 +1223,11 @@ function applyModelCellStyle(cell, st) {
 
 function modelToWorkbook(sheets) {
   const wb = new ExcelJS.Workbook();
-  const used = new Set();
+  /* The hidden sheet Margo keeps its chart metadata on is added afterwards,
+     so a workbook with a sheet of that name collided with it and the whole
+     save threw. Claiming the name up front renames the author's sheet
+     instead. */
+  const used = new Set([MARGO_META_SHEET.toLowerCase()]);
   sheets.forEach((sheet, i) => {
     let name = sanitizeSheetName(sheet.name) || `Sheet${i + 1}`;
     let unique = name, n = 2;
@@ -1252,7 +1256,7 @@ function modelToWorkbook(sheets) {
       const [rStr, cStr] = key.split(',');
       const r = parseInt(rStr, 10);
       const c = parseInt(cStr, 10);
-      const row = sheet.rows[r];
+      const row = (sheet.rows || [])[r];
       const val = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
       if (val === '' || val === null || val === undefined) {
         applyModelCellStyle(ws.getCell(r + 1, c + 1), styles[key]);

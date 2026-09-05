@@ -3319,7 +3319,9 @@
         ['normal', 'Normal (1")'],
         ['narrow', 'Narrow (0.5")'],
         ['moderate', 'Moderate (0.75")'],
-        ['wide', 'Wide (1.5")']
+        // Word's own Wide preset, and what Margo writes into the file: 2in
+        // sides, 1in top and bottom. The label said 1.5in and never matched.
+        ['wide', 'Wide (2")']
       ].forEach(([val, lbl]) => {
         const opt = document.createElement('option');
         opt.value = val;
