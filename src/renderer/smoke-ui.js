@@ -647,6 +647,32 @@
         if (close) close.click();
         t('doc find highlights clear on close', !document.querySelector('.tab-pane:not([hidden]) mark.margo-find-hit'));
       }
+
+      /* Insert Symbol reached for ctx.modalBackdrop, which was never handed to
+         editors, so every symbol threw before it could be inserted. */
+      const symBody = document.querySelector('.tab-pane:not([hidden]) .doc-page-body');
+      if (symBody && edDoc && edDoc._test && edDoc._test.openSymbols) {
+        symBody.focus();
+        const caret = document.createRange();
+        caret.selectNodeContents(symBody);
+        caret.collapse(false);
+        const symSel = window.getSelection();
+        symSel.removeAllRanges();
+        symSel.addRange(caret);
+        const textBefore = symBody.textContent;
+        edDoc._test.openSymbols();
+        await wait(80);
+        const symBtn = document.querySelector('#modal-body .doc-symbol-btn');
+        const symChar = symBtn ? symBtn.textContent : '';
+        t('symbol picker opens', !!symBtn, symChar);
+        if (symBtn) symBtn.click();
+        await wait(100);
+        const symBackdrop = document.getElementById('modal-backdrop');
+        t('symbol pick closes the picker', !!(symBackdrop && symBackdrop.classList.contains('hidden')));
+        t('symbol pick reaches the document',
+          !!symChar && symBody.textContent !== textBefore && symBody.textContent.indexOf(symChar) >= 0,
+          `${symChar} :: ${symBody.textContent.slice(-24)}`);
+      }
       // themed save modal (Don't Save)
       T.state.dirty = true;
       const dirtyPromise = T.resolveDirty();
@@ -754,6 +780,40 @@
       ed._test.sortRangeCells(20, 22, 6, true);
       const sorted = [20, 21, 22].map((r) => ed._test.getCell(r, 6)).join(',');
       t('sheet sort keeps every row', sorted === '1,2,3', sorted);
+
+      /* Every action button closed the modal it belonged to, so Next stepped
+         to the second match and shut the dialog on its way out. */
+      ed._test.setCell(30, 7, 'findme');
+      ed._test.setCell(31, 7, 'findme');
+      ed.commands.find();
+      await wait(80);
+      const sheetFindInput = document.querySelector('#modal-body .sheet-fx-search');
+      if (sheetFindInput) {
+        sheetFindInput.value = 'findme';
+        sheetFindInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(60);
+      }
+      const sheetNameBox = document.querySelector('.tab-pane:not([hidden]) .sheet-namebox')
+        || document.querySelector('.sheet-namebox');
+      const firstMatchRef = sheetNameBox && sheetNameBox.textContent;
+      const nextBtn = [...document.querySelectorAll('#modal-actions .btn')]
+        .find((b) => b.textContent.indexOf('Next') >= 0);
+      if (nextBtn) nextBtn.click();
+      await wait(60);
+      const findBackdrop = document.getElementById('modal-backdrop');
+      const stillOpen = !!(findBackdrop && !findBackdrop.classList.contains('hidden'));
+      const secondMatchRef = sheetNameBox && sheetNameBox.textContent;
+      t('sheet find Next steps without closing',
+        !!nextBtn && stillOpen && firstMatchRef === 'H31' && secondMatchRef === 'H32',
+        `${firstMatchRef} -> ${secondMatchRef} open=${stillOpen}`);
+      const findCloseBtn = [...document.querySelectorAll('#modal-actions .btn')]
+        .find((b) => b.textContent === 'Close');
+      if (findCloseBtn) findCloseBtn.click();
+      await wait(40);
+      t('sheet find closes on Close',
+        !!document.getElementById('modal-backdrop').classList.contains('hidden'));
+      ed._test.setCell(30, 7, '');
+      ed._test.setCell(31, 7, '');
 
       // Test cell sizing and text size
       ed._test.setColWidth(0, 150);

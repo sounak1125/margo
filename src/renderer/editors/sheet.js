@@ -1638,20 +1638,28 @@
       input.addEventListener('input', doFind);
       setTimeout(() => { input.focus(); input.select(); }, 40);
 
+      function step(dir) {
+        if (!found.length) return;
+        foundIdx = (foundIdx + dir + found.length) % found.length;
+        status.textContent = `Match ${foundIdx + 1} of ${found.length}`;
+        select(found[foundIdx].r, found[foundIdx].c);
+        paintSheetFindHits();
+      }
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        step(e.shiftKey ? -1 : 1);
+        input.focus();
+      });
+
+      /* Walking the matches leaves the dialog up. Every other button here
+         answers the prompt and closes, which is why Next used to move to the
+         second match and then shut the dialog on its way out. */
       ctx.openModal('Find in Spreadsheet', wrap, [
         { label: 'Close', value: null },
-        {
-          label: 'Next ➔',
-          primary: true,
-          value: () => {
-            if (found.length) {
-              foundIdx = (foundIdx + 1) % found.length;
-              status.textContent = `Match ${foundIdx + 1} of ${found.length}`;
-              select(found[foundIdx].r, found[foundIdx].c);
-              paintSheetFindHits();
-            }
-          }
-        }
+        { label: '◀ Previous', keepOpen: true, value: () => step(-1) },
+        { label: 'Next ▶', primary: true, keepOpen: true, value: () => step(1) }
       ]).then(() => {
         found = [];
         foundIdx = 0;

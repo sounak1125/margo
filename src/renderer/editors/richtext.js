@@ -2293,8 +2293,14 @@
           btn.className = 'doc-symbol-btn';
           btn.textContent = sym;
           btn.title = `Insert ${sym}`;
+          /* Hiding the backdrop element directly left the modal's promise
+             unresolved, and the element it reached for was never on ctx in
+             the first place - so every symbol threw before it could be
+             inserted and the picker only ever closed via its own Close
+             button. Dismiss it the way everything else does. */
+          btn.addEventListener('mousedown', (e) => e.preventDefault());
           btn.addEventListener('click', () => {
-            ctx.modalBackdrop.classList.add('hidden');
+            ctx.closeModal(null);
             restoreSelection();
             exec('insertText', sym);
           });
@@ -3633,6 +3639,7 @@
           openContextMenu: (x, y) => openContextMenu(x, y),
           closeContextMenu,
           openStats: openStatsModal,
+          openSymbols: () => openSymbolsPicker(),
           selectAll: () => selectAllDocument(),
           copyPayload: () => buildCopyPayload(),
           currentZoom: () => currentZoom(),

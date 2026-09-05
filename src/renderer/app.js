@@ -159,11 +159,18 @@
     els.modalBody.innerHTML = '';
     els.modalBody.appendChild(bodyEl);
     els.modalActions.innerHTML = '';
-    actions.forEach(({ label, primary, value }) => {
+    actions.forEach(({ label, primary, value, keepOpen }) => {
       const b = document.createElement('button');
       b.className = 'btn ' + (primary ? 'primary' : 'ghost');
       b.textContent = label;
-      b.addEventListener('click', () => closeModal(typeof value === 'function' ? value() : value));
+      b.addEventListener('click', () => {
+        const result = typeof value === 'function' ? value() : value;
+        /* A button that answers the prompt closes it, which is every button
+           here bar one: "Next" in the spreadsheet's find dialog acts on the
+           grid behind the modal and has to leave it standing for the next
+           press, or the dialog shuts itself on the first match. */
+        if (!keepOpen) closeModal(result);
+      });
       els.modalActions.appendChild(b);
     });
     els.modalBackdrop.classList.remove('hidden');
@@ -743,6 +750,7 @@
       inputModal,
       confirmModal,
       openModal,
+      closeModal,
       toast,
       isActive: () => state.activeTabId === id
     };
