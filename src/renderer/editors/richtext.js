@@ -2490,24 +2490,39 @@
       });
     }
 
+    /* Replace used to search the whole document again, and runFind puts the
+       position back to the first match - so Replace jumped to the top of the
+       document on every press instead of moving on to the next match, and a
+       replacement containing the text being searched for was found again
+       immediately, so replacing "a" with "aa" never got anywhere. Taking the
+       replaced match out of the list leaves every other match where it was:
+       the index now points at the one after it, and the text just inserted is
+       not searched again. */
     function replaceCurrent() {
       if (findIndex < 0 || !findHits[findIndex]) return;
       const cur = findHits[findIndex];
       const repl = replaceInput ? replaceInput.value : '';
-      const textNode = document.createTextNode(repl);
-      cur.replaceWith(textNode);
+      const parent = cur.parentNode;
+      cur.replaceWith(document.createTextNode(repl));
+      if (parent) parent.normalize();
+      findHits.splice(findIndex, 1);
+      if (!findHits.length) findIndex = -1;
+      else if (findIndex >= findHits.length) findIndex = findHits.length - 1;
       ctx.markDirty();
       recordNow();
-      runFind(findInput.value);
+      highlightFindCurrent();
     }
 
     function replaceAll() {
       if (!findHits.length || !findInput.value) return;
       const repl = replaceInput ? replaceInput.value : '';
+      const touched = new Set();
       findHits.forEach((hit) => {
-        const textNode = document.createTextNode(repl);
-        hit.replaceWith(textNode);
+        const parent = hit.parentNode;
+        hit.replaceWith(document.createTextNode(repl));
+        if (parent) touched.add(parent);
       });
+      touched.forEach((parent) => parent.normalize());
       ctx.markDirty();
       unwrapFindMarks();
       recordNow();

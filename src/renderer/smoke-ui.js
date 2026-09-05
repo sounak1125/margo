@@ -648,6 +648,60 @@
         t('doc find highlights clear on close', !document.querySelector('.tab-pane:not([hidden]) mark.margo-find-hit'));
       }
 
+      /* Replace searched the whole document again afterwards, and that resets
+         the position to the first match - so Replace walked back to the top
+         of the document on every press instead of carrying on to the next
+         match. Replacing a word with itself leaves the document byte for byte
+         as it was, so only the position and the count are under test. */
+      {
+        const edRep = T.getEditor();
+        /* Four known matches of a string nothing else in the document uses,
+           so the count is the same every run. Removed again afterwards, and
+           the word is replaced with itself, so the document is left exactly
+           as it was for the save and export checks further down. */
+        const repBody = document.querySelector('.tab-pane:not([hidden]) .doc-page-body');
+        let probe = null;
+        if (repBody) {
+          probe = document.createElement('p');
+          probe.textContent = 'zqx zqx zqx zqx';
+          repBody.appendChild(probe);
+        }
+        if (edRep && edRep.commands && edRep.commands.find) edRep.commands.find();
+        await wait(80);
+        const bar = document.querySelector('.tab-pane:not([hidden]) .doc-find-bar')
+          || document.querySelector('.doc-find-bar');
+        const findIn = bar && bar.querySelector('.doc-find-input:not(.doc-replace-input)');
+        const replaceIn = bar && bar.querySelector('.doc-replace-input');
+        const countEl = bar && bar.querySelector('.doc-find-count');
+        const nextBtn = bar && bar.querySelector('.doc-find-next');
+        const replaceBtn = bar && bar.querySelector('.doc-replace-btn');
+        if (probe && findIn && replaceIn && countEl && nextBtn && replaceBtn) {
+          findIn.focus();
+          findIn.value = 'zqx';
+          findIn.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(80);
+          const total = parseInt(countEl.textContent.split('/')[1] || '0', 10);
+          t('doc replace has several matches to walk', total === 4, `${total} matches`);
+          nextBtn.click();
+          await wait(60);
+          const beforeReplace = countEl.textContent.trim();
+          replaceIn.value = 'zqx';
+          replaceBtn.click();
+          await wait(80);
+          const afterReplace = countEl.textContent.trim();
+          t('doc replace carries on from where it was',
+            beforeReplace === '2 / 4' && afterReplace === '2 / 3',
+            `before=${beforeReplace} after=${afterReplace}`);
+        }
+        const closeRep = bar && bar.querySelector('.doc-find-close');
+        if (closeRep) closeRep.click();
+        await wait(40);
+        if (probe) probe.remove();
+        t('doc replace probe text removed',
+          !!repBody && repBody.textContent.indexOf('zqx') < 0);
+        T.state.dirty = false;
+      }
+
       /* Insert Symbol reached for ctx.modalBackdrop, which was never handed to
          editors, so every symbol threw before it could be inserted. */
       const symBody = document.querySelector('.tab-pane:not([hidden]) .doc-page-body');
