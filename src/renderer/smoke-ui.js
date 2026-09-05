@@ -969,6 +969,43 @@
       t('recents show content thumbnails', document.querySelectorAll('.home-tile-cover:not(.home-tile-cover-type) img').length >= 1,
         `${document.querySelectorAll('.home-tile-cover:not(.home-tile-cover-type) img').length} content thumbs`);
       await shot('landing-recents.png');
+
+      /* A spreadsheet or PDF in the library needs its document opened and
+         rasterized, too much to do under the tiles - so those entries wait
+         for the library to go off screen. They used to be shifted off the
+         queue here and put nowhere, so they never got a thumbnail at all. */
+      const backfill = T.thumbBackfill;
+      backfill.reset();
+      backfill.queue(cfg.xlsxPath);
+      for (let i = 0; i < 40 && backfill.state().deferred.indexOf(cfg.xlsxPath) < 0; i++) await wait(100);
+      const heldState = backfill.state();
+      t('library holds heavy thumbnails instead of dropping them',
+        heldState.deferred.indexOf(cfg.xlsxPath) >= 0,
+        `queued=${heldState.queued.length} deferred=${heldState.deferred.length}`);
+
+      await T.openFromPath(cfg.welcomePath);
+      for (let i = 0; i < 60 && backfill.state().seen.indexOf(cfg.xlsxPath) < 0; i++) await wait(100);
+      const resumedState = backfill.state();
+      t('library resumes them once it is off screen',
+        resumedState.deferred.indexOf(cfg.xlsxPath) < 0
+          && resumedState.seen.indexOf(cfg.xlsxPath) >= 0,
+        `deferred=${resumedState.deferred.length} queued=${resumedState.queued.length} seen=${resumedState.seen.length}`);
+      T.state.dirty = false;
+
+      /* One hidden window paints every document card, so two requests in
+         flight together used to abort each other's load, and whichever
+         capture ran next returned the wrong card. */
+      const cardHtml = (label) =>
+        '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#fff">' +
+        `<div style="font:700 44px sans-serif;padding:48px">${label}</div>`;
+      const overlapping = await Promise.all([1, 2, 3, 4].map((n) =>
+        window.margo.renderHtmlThumb({ html: cardHtml('Card ' + n), width: 220, height: 284 })));
+      const okCount = overlapping.filter((res) => res && res.ok && res.dataUrl).length;
+      const distinct = new Set(overlapping.filter((res) => res && res.dataUrl).map((res) => res.dataUrl)).size;
+      t('overlapping thumbnail renders all succeed', okCount === 4,
+        `${okCount}/4 :: ${overlapping.map((res) => (res && res.ok ? 'ok' : (res && res.error) || 'fail')).join(' | ')}`);
+      t('overlapping thumbnail renders return their own card', distinct === 4,
+        `${distinct} distinct of ${okCount}`);
     } catch (err) {
       t('suite crashed', false, err.stack || err.message);
     }

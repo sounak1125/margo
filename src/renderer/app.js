@@ -850,6 +850,9 @@
     const onHome = state.view === 'home';
     els.shell.classList.toggle('view-home', onHome);
     if (onHome) closeSidebar(true);
+    // Every view change goes through here, so this is where the thumbnail
+    // work that was too heavy for the library view gets picked back up.
+    else resumeThumbBackfill();
   }
 
   /* ---------------- views ---------------- */
@@ -1293,6 +1296,15 @@
   }
 
   const thumbBackfillQueue = [];
+  /* Set aside rather than dropped. Everything but a Word file needs the
+     document opened and rasterized to get a thumbnail, which is too much work
+     to do under the tiles the reader is looking at - so those entries wait
+     here until the library is off screen, and go back on the queue then. They
+     used to be shifted off the queue on the home view and simply not put
+     anywhere, which is why a spreadsheet or a PDF in the library never got
+     past its type icon: the queue is only ever filled from loadRecents, and
+     that runs on the home view too, so they were dropped again every time. */
+  const thumbBackfillDeferred = [];
   const thumbBackfillSeen = new Set();
   let thumbBackfillRunning = false;
   let homeScrolling = false;
@@ -1314,10 +1326,25 @@
     while (homeScrolling) await waitMs(80);
   }
 
+  function deferThumbBackfill(p) {
+    if (!thumbBackfillDeferred.includes(p)) thumbBackfillDeferred.push(p);
+  }
+
+  /* Called when the view leaves home, which is the moment the deferred work
+     became safe to do. */
+  function resumeThumbBackfill() {
+    if (!thumbBackfillDeferred.length) return;
+    for (const p of thumbBackfillDeferred.splice(0)) {
+      if (!thumbBackfillQueue.includes(p)) thumbBackfillQueue.push(p);
+    }
+    runThumbBackfill();
+  }
+
   function queueThumbBackfill(list) {
     for (const r of list) {
       if (!recentWantsContentThumb(r) || r.thumb || thumbBlobUrls.has(r.path.toLowerCase())) continue;
       if (thumbBackfillSeen.has(r.path) || thumbBackfillQueue.includes(r.path)) continue;
+      if (thumbBackfillDeferred.includes(r.path)) continue;
       thumbBackfillQueue.push(r.path);
     }
     runThumbBackfill();
@@ -1333,21 +1360,25 @@
       const p = thumbBackfillQueue.shift();
       try {
         if (state.view === 'home') {
+          // A Word file often carries its own preview, which is a cheap read
+          // and safe to do here. Everything else waits.
           const ext = String(p).split('.').pop().toLowerCase();
           if (ext === 'docx' && window.margo.readDocxThumb) {
             const emb = await window.margo.readDocxThumb(p);
             if (emb && emb.ok && emb.dataUrl) {
               thumbBackfillSeen.add(p);
               applyThumbToLibrary(p, emb.dataUrl);
+              continue;
             }
           }
+          deferThumbBackfill(p);
           continue;
         }
         const res = await window.margo.peekPath(p);
         if (!res.ok || !res.doc) continue;
         await waitWhileHomeScrolling();
-        if (state.view === 'home' || homeScrolling) {
-          thumbBackfillQueue.push(p);
+        if (state.view === 'home') {
+          deferThumbBackfill(p);
           continue;
         }
         const url = await window.MargoThumbs.generate(res.doc, res.doc);
@@ -2327,7 +2358,24 @@
     shareDoc,
     flushDrafts: flushAllDrafts,
     restoreDrafts: () => restoreDrafts(),
-    discardDrafts: () => window.margo.drafts.clear()
+    discardDrafts: () => window.margo.drafts.clear(),
+    thumbBackfill: {
+      state: () => ({
+        queued: thumbBackfillQueue.slice(),
+        deferred: thumbBackfillDeferred.slice(),
+        seen: [...thumbBackfillSeen],
+        running: thumbBackfillRunning
+      }),
+      reset: () => {
+        thumbBackfillQueue.length = 0;
+        thumbBackfillDeferred.length = 0;
+        thumbBackfillSeen.clear();
+      },
+      queue: (p) => {
+        if (!thumbBackfillQueue.includes(p)) thumbBackfillQueue.push(p);
+        runThumbBackfill();
+      }
+    }
   };
 
   boot();

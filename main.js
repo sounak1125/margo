@@ -372,7 +372,21 @@ function closeThumbWindow() {
   thumbWin = null;
 }
 
-ipcMain.handle('thumbs:render-html', async (_e, req) => {
+/* That one reused window can only be showing one card at a time, so two
+   requests in flight together raced over it: the second loadFile aborts the
+   first, and whichever capturePage ran next returned the wrong card - saved
+   against the first caller's file. The renderer has two callers that overlap
+   easily, a save refreshing its own thumbnail and the library backfilling
+   everything else, so requests take the window in turn. */
+let thumbChain = Promise.resolve();
+
+function queueThumbJob(job) {
+  const result = thumbChain.then(job, job);
+  thumbChain = result.then(() => {}, () => {});
+  return result;
+}
+
+ipcMain.handle('thumbs:render-html', (_e, req) => queueThumbJob(async () => {
   const width = Math.max(1, Math.round((req && req.width) || 440));
   const height = Math.max(1, Math.round((req && req.height) || 568));
   const tmp = path.join(app.getPath('temp'), `margo-thumb-${process.pid}-${thumbSeq++}.html`);
@@ -392,7 +406,7 @@ ipcMain.handle('thumbs:render-html', async (_e, req) => {
   } finally {
     try { await fs.promises.unlink(tmp); } catch {}
   }
-});
+}));
 
 ipcMain.handle('thumbs:set', (_e, { path: filePath, dataUrl }) => {
   try {
