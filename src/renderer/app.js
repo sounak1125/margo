@@ -730,7 +730,22 @@
     };
     state.tabs.push(tab);
     await activateTab(id);
-    const ctx = { markDirty, setStatus, status: tab.status, toolbar: tab.toolbar, inputModal, confirmModal, openModal, toast };
+    /* An editor that listens on the document rather than on its own pane
+       hears every key in the window, including keys meant for whichever tab
+       is in front. isActive lets it tell the difference; nothing else can,
+       because a background tab's pane is hidden but its editor is still very
+       much alive. */
+    const ctx = {
+      markDirty,
+      setStatus,
+      status: tab.status,
+      toolbar: tab.toolbar,
+      inputModal,
+      confirmModal,
+      openModal,
+      toast,
+      isActive: () => state.activeTabId === id
+    };
     const factory = window.MargoEditors[doc.kind];
     if (!factory) {
       state.tabs = state.tabs.filter((x) => x.id !== id);

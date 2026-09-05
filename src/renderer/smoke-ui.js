@@ -852,6 +852,28 @@
       T.state.dirty = false;
       if (T.state.activeTabId) await T.closeTab(T.state.activeTabId);
 
+      /* 6c. A Word document listens for keys on the document, not on its own
+         pane, so with more than one open they all used to act on the same
+         keystroke. Ctrl+Enter appended a blank page to every open document,
+         and only the front one was marked unsaved. */
+      T.resetSession();
+      await T.newDoc('doc');
+      const bgTab = T.state.tabs[T.state.tabs.length - 1];
+      await T.newDoc('doc');
+      const fgTab = T.state.tabs[T.state.tabs.length - 1];
+      t('two doc tabs open', T.state.tabs.length === 2 && fgTab.id === T.state.activeTabId,
+        `tabs=${T.state.tabs.length} active=${T.state.activeTabId}`);
+      const bgPagesBefore = bgTab.editor._test.pageCount();
+      const fgPagesBefore = fgTab.editor._test.pageCount();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await wait(80);
+      const bgPagesAfter = bgTab.editor._test.pageCount();
+      const fgPagesAfter = fgTab.editor._test.pageCount();
+      t('Ctrl+Enter pages only the front tab',
+        fgPagesAfter === fgPagesBefore + 1 && bgPagesAfter === bgPagesBefore,
+        `front ${fgPagesBefore}->${fgPagesAfter}, behind ${bgPagesBefore}->${bgPagesAfter}`);
+      T.resetSession();
+
       // 7. md library thumb skipped (Markdown recents use type icons)
       await T.openFromPath(cfg.welcomePath);
       const mdThumbUrl = await window.MargoThumbs.generate(T.state.doc, T.getEditor().getData());

@@ -3408,7 +3408,19 @@
       makeBtn(pView, 'Focus Mode (Esc to exit)', I.focus || '🔲', () => toggleFocusMode());
     }
 
+    /* Every open Word document keeps its own listener on the document, so a
+       key pressed once is delivered to all of them. Without this the tab in
+       front and the ones behind it all acted on it: Ctrl+Enter appended a
+       blank page to every open document, and because markDirty belongs to the
+       active tab, the documents behind it were changed without even being
+       marked unsaved - the extra pages just turned up in the file the next
+       time they were saved. */
+    function isActiveTab() {
+      return !ctx.isActive || ctx.isActive();
+    }
+
     function onFindKeydown(e) {
+      if (!isActiveTab()) return;
       if (e.key === 'Escape') {
         if (findOpen) {
           e.preventDefault();
@@ -3571,6 +3583,9 @@
         requestAnimationFrame(() => schedulePaginate(pagesRoot.querySelector('.doc-page')));
 
         function onSelChange() {
+          // Fires for every caret move in the window, so the tabs behind this
+          // one bow out before walking any ancestors.
+          if (!isActiveTab()) return;
           const sel = document.getSelection();
           const anchor = sel && sel.anchorNode;
           if (!anchor || !pagesRoot) return;
