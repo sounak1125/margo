@@ -459,154 +459,312 @@
     /* ---------- Evaluator Core ---------- */
     function evaluateFormula(expr, currentR, currentC, sheetIdx = model.active) {
       if (!expr || !String(expr).startsWith('=')) return expr;
+      const formulaBody = String(expr).slice(1).trim();
+      if (!formulaBody) return '';
       const key = `${sheetIdx}!${currentR},${currentC}`;
       if (currentCalcCycle.has(key)) return '#CIRCULAR!';
       currentCalcCycle.add(key);
 
       try {
-        const formulaBody = String(expr).slice(1).trim();
-        const res = parseExpression(formulaBody, currentR, currentC, sheetIdx);
-        currentCalcCycle.delete(key);
-        return res;
+        return parseFormula(formulaBody, currentR, currentC, sheetIdx);
       } catch (err) {
-        currentCalcCycle.delete(key);
         return '#ERROR!';
+      } finally {
+        currentCalcCycle.delete(key);
       }
     }
 
-    function parseExpression(str, curR, curC, sIdx) {
-      str = str.trim();
-      if (!str) return '';
+    /* The formula text is walked once into tokens and parsed by precedence.
+       The parser it replaced matched "NAME(...)" with a single greedy regex
+       and then chose an operator by scanning the raw string, so anything
+       carrying more than one bracketed group was read wrong and quietly
+       returned a number rather than an error: =SUM(A1:A2)+SUM(B1:B2) parsed
+       as one SUM whose argument was the text "A1:A2)+SUM(B1:B2"; =(1+2)*3
+       never saw its own parentheses, because grouping was not in the grammar
+       at all; and a leading minus was applied to everything after it, so
+       =-5+3 came back -8. */
 
-      // Match Function Call: NAME(...)
-      const fnMatch = /^([A-Z_]+)\s*\((.*)\)$/is.exec(str);
-      if (fnMatch) {
-        const fnName = fnMatch[1].toUpperCase();
-        const argsStr = fnMatch[2];
-        const fn = FORMULA_FUNCTIONS[fnName];
-        if (fn) {
-          const args = splitArguments(argsStr).map((arg) => {
-            const range = parseRange(arg);
-            if (range) {
-              const targetSheetIdx = range.sheetName
-                ? model.sheets.findIndex((s) => s.name.toLowerCase() === range.sheetName.toLowerCase())
-                : sIdx;
-              const actualSheet = targetSheetIdx >= 0 ? targetSheetIdx : sIdx;
-              const matrix = [];
-              for (let r = range.start.row; r <= range.end.row; r++) {
-                const rArr = [];
-                for (let c = range.start.col; c <= range.end.col; c++) {
-                  rArr.push(getCellValue(r, c, actualSheet));
-                }
-                matrix.push(rArr);
-              }
-              return matrix.length === 1 && range.start.row === range.end.row ? matrix[0] : matrix;
+    /* Up to three letters and seven digits is the whole of Excel's grid, and
+       keeping the pattern that tight is what stops a function name that ends
+       in digits from being read as a cell. */
+    const CELL_RE = /^\$?([A-Za-z]{1,3})\$?([0-9]{1,7})/;
+    const NUMBER_RE = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/;
+    const NAME_RE = /^[A-Za-z_][A-Za-z0-9_.]*/;
+    const QUOTED_SHEET_RE = /^'((?:[^']|'')+)'!/;
+    const PLAIN_SHEET_RE = /^([A-Za-z_][A-Za-z0-9_. ]*)!/;
+
+    function matchSheetPrefix(src) {
+      const quoted = QUOTED_SHEET_RE.exec(src);
+      if (quoted) return { name: quoted[1].replace(/''/g, "'"), len: quoted[0].length };
+      const plain = PLAIN_SHEET_RE.exec(src);
+      return plain ? { name: plain[1], len: plain[0].length } : null;
+    }
+
+    function matchCellToken(src, i) {
+      const rest = src.slice(i);
+      const prefix = matchSheetPrefix(rest);
+      const body = prefix ? rest.slice(prefix.len) : rest;
+      const m = CELL_RE.exec(body);
+      if (!m) return null;
+      const len = (prefix ? prefix.len : 0) + m[0].length;
+      /* "LOG10(" is a function call, not cell LOG10, and "A1B2" is a name
+         rather than cell A1 followed by something else. */
+      if (/[A-Za-z0-9_$(]/.test(src[i + len] || '')) return null;
+      return {
+        len,
+        sheetName: prefix ? prefix.name : null,
+        col: colIndex(m[1]),
+        row: parseInt(m[2], 10) - 1
+      };
+    }
+
+    function tokenizeFormula(src) {
+      const tokens = [];
+      let i = 0;
+      while (i < src.length) {
+        const ch = src[i];
+        if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+
+        if (ch === '"') {
+          let j = i + 1;
+          let text = '';
+          while (j < src.length) {
+            if (src[j] === '"') {
+              // "" inside a quoted string is Excel's escape for one quote.
+              if (src[j + 1] === '"') { text += '"'; j += 2; continue; }
+              break;
             }
-            return parseExpression(arg, curR, curC, sIdx);
-          });
-          return fn(args, { curR, curC, sIdx });
-        }
-      }
-
-      // Unary +/-
-      if (str.startsWith('-') || str.startsWith('+')) {
-        const sign = str[0];
-        const inner = parseExpression(str.slice(1), curR, curC, sIdx);
-        if (sign === '-') {
-          const n = toNum(inner);
-          if (n != null) return -n;
-        }
-        return inner;
-      }
-
-      // Binary operations
-      const op = findLowestPrecedenceOp(str);
-      if (op) {
-        const left = parseExpression(str.slice(0, op.index), curR, curC, sIdx);
-        const right = parseExpression(str.slice(op.index + op.len), curR, curC, sIdx);
-        switch (op.token) {
-          case '+': return (toNum(left) || 0) + (toNum(right) || 0);
-          case '-': return (toNum(left) || 0) - (toNum(right) || 0);
-          case '*': return (toNum(left) || 0) * (toNum(right) || 0);
-          case '/': return (toNum(right) || 0) !== 0 ? (toNum(left) || 0) / (toNum(right) || 0) : '#DIV/0!';
-          case '^': return Math.pow(toNum(left) || 0, toNum(right) || 0);
-          case '&': return String(left ?? '') + String(right ?? '');
-          case '=': return left == right;
-          case '<>': return left != right;
-          case '<': return (toNum(left) || 0) < (toNum(right) || 0);
-          case '>': return (toNum(left) || 0) > (toNum(right) || 0);
-          case '<=': return (toNum(left) || 0) <= (toNum(right) || 0);
-          case '>=': return (toNum(left) || 0) >= (toNum(right) || 0);
-        }
-      }
-
-      // Literals
-      if (str.startsWith('"') && str.endsWith('"')) return str.slice(1, -1);
-      if (isNumeric(str)) return Number(str.replace(/,/g, ''));
-      if (str.toUpperCase() === 'TRUE') return true;
-      if (str.toUpperCase() === 'FALSE') return false;
-
-      // Cell reference
-      const cellRef = parseCellRef(str);
-      if (cellRef) {
-        const targetSheetIdx = cellRef.sheetName
-          ? model.sheets.findIndex((s) => s.name.toLowerCase() === cellRef.sheetName.toLowerCase())
-          : sIdx;
-        return getCellValue(cellRef.row, cellRef.col, targetSheetIdx >= 0 ? targetSheetIdx : sIdx);
-      }
-
-      return str;
-    }
-
-    function splitArguments(str) {
-      const args = [];
-      let depth = 0;
-      let inQuotes = false;
-      let cur = '';
-      for (let i = 0; i < str.length; i++) {
-        const ch = str[i];
-        if (ch === '"') inQuotes = !inQuotes;
-        else if (!inQuotes && (ch === '(' || ch === '[')) depth++;
-        else if (!inQuotes && (ch === ')' || ch === ']')) depth--;
-        else if (!inQuotes && depth === 0 && ch === ',') {
-          args.push(cur.trim());
-          cur = '';
+            text += src[j++];
+          }
+          if (src[j] !== '"') throw new Error('unterminated text');
+          tokens.push({ type: 'text', value: text });
+          i = j + 1;
           continue;
         }
-        cur += ch;
+
+        const cell = matchCellToken(src, i);
+        if (cell) {
+          tokens.push({ type: 'cell', value: cell });
+          i += cell.len;
+          continue;
+        }
+
+        const num = NUMBER_RE.exec(src.slice(i));
+        if (num) {
+          let value = Number(num[0]);
+          i += num[0].length;
+          // 15% is a literal in every spreadsheet; it used to evaluate to NaN.
+          if (src[i] === '%') { value /= 100; i++; }
+          tokens.push({ type: 'number', value });
+          continue;
+        }
+
+        const name = NAME_RE.exec(src.slice(i));
+        if (name) {
+          tokens.push({ type: 'name', value: name[0] });
+          i += name[0].length;
+          continue;
+        }
+
+        const pair = src.substr(i, 2);
+        if (pair === '<>' || pair === '<=' || pair === '>=') {
+          tokens.push({ type: 'op', value: pair });
+          i += 2;
+          continue;
+        }
+        if ('+-*/^&=<>(),:'.indexOf(ch) >= 0) {
+          tokens.push({ type: 'op', value: ch });
+          i++;
+          continue;
+        }
+        throw new Error('unexpected character ' + ch);
       }
-      if (cur.trim()) args.push(cur.trim());
-      return args;
+      return tokens;
     }
 
-    function findLowestPrecedenceOp(str) {
-      let depth = 0;
-      let inQuotes = false;
-      const ops = [
-        ['<>', '<=', '>=', '=', '<', '>'],
-        ['&'],
-        ['+', '-'],
-        ['*', '/'],
-        ['^']
-      ];
-      for (const opGroup of ops) {
-        for (let i = str.length - 1; i >= 0; i--) {
-          const ch = str[i];
-          if (ch === '"') inQuotes = !inQuotes;
-          else if (!inQuotes && ch === ')') depth++;
-          else if (!inQuotes && ch === '(') depth--;
-          else if (!inQuotes && depth === 0) {
-            for (const op of opGroup) {
-              if (str.substr(i, op.length) !== op) continue;
-              if (i === 0 && (op === '+' || op === '-')) continue;
-              if (op === '=' && (str[i - 1] === '<' || str[i - 1] === '>')) continue;
-              if (op === '>' && str[i - 1] === '<') continue;
-              return { token: op, index: i, len: op.length };
+    function parseFormula(src, curR, curC, sIdx) {
+      const tokens = tokenizeFormula(src);
+      let pos = 0;
+
+      const atOp = (value) => {
+        const t = tokens[pos];
+        return !!t && t.type === 'op' && t.value === value;
+      };
+      const expectOp = (value) => {
+        if (!atOp(value)) throw new Error('expected ' + value);
+        pos++;
+      };
+
+      function sheetIndexFor(sheetName) {
+        if (!sheetName) return sIdx;
+        const found = model.sheets.findIndex(
+          (s) => String(s.name).toLowerCase() === String(sheetName).toLowerCase()
+        );
+        return found >= 0 ? found : sIdx;
+      }
+
+      function rangeValues(from, to) {
+        const idx = sheetIndexFor(from.sheetName || to.sheetName);
+        const r1 = Math.min(from.row, to.row);
+        const r2 = Math.max(from.row, to.row);
+        const c1 = Math.min(from.col, to.col);
+        const c2 = Math.max(from.col, to.col);
+        const matrix = [];
+        for (let r = r1; r <= r2; r++) {
+          const row = [];
+          for (let c = c1; c <= c2; c++) row.push(getCellValue(r, c, idx));
+          matrix.push(row);
+        }
+        /* One row collapses to a flat list, which is the shape SUM and MATCH
+           read; anything taller keeps its rows for VLOOKUP and INDEX. */
+        return matrix.length === 1 ? matrix[0] : matrix;
+      }
+
+      function callArguments() {
+        const args = [];
+        let lastWasEmpty = false;
+        expectOp('(');
+        if (!atOp(')')) {
+          for (;;) {
+            if (atOp(',') || atOp(')')) {
+              args.push('');
+              lastWasEmpty = true;
+            } else {
+              args.push(expression());
+              lastWasEmpty = false;
             }
+            if (!atOp(',')) break;
+            pos++;
           }
         }
+        expectOp(')');
+        // "SUM(1,)" is one argument, not two.
+        if (lastWasEmpty && args.length > 1) args.pop();
+        return args;
       }
-      return null;
+
+      function primary() {
+        const t = tokens[pos];
+        if (!t) throw new Error('unexpected end of formula');
+
+        if (t.type === 'number' || t.type === 'text') {
+          pos++;
+          return t.value;
+        }
+
+        if (t.type === 'cell') {
+          pos++;
+          if (atOp(':') && tokens[pos + 1] && tokens[pos + 1].type === 'cell') {
+            pos++;
+            const end = tokens[pos++].value;
+            return rangeValues(t.value, end);
+          }
+          return getCellValue(t.value.row, t.value.col, sheetIndexFor(t.value.sheetName));
+        }
+
+        if (t.type === 'name') {
+          pos++;
+          const upper = t.value.toUpperCase();
+          if (atOp('(')) {
+            const args = callArguments();
+            const fn = FORMULA_FUNCTIONS[upper];
+            if (!fn) return '#NAME?';
+            return fn(args, { curR, curC, sIdx });
+          }
+          if (upper === 'TRUE') return true;
+          if (upper === 'FALSE') return false;
+          // Not a function and not a reference: hand the word back as text.
+          return t.value;
+        }
+
+        if (atOp('(')) {
+          pos++;
+          const value = expression();
+          expectOp(')');
+          return value;
+        }
+
+        throw new Error('unexpected token');
+      }
+
+      function unary() {
+        if (atOp('-') || atOp('+')) {
+          const sign = tokens[pos].value;
+          pos++;
+          const value = unary();
+          if (sign !== '-') return value;
+          const n = toNum(value);
+          return n != null ? -n : value;
+        }
+        return primary();
+      }
+
+      function power() {
+        let left = unary();
+        while (atOp('^')) {
+          pos++;
+          const right = unary();
+          left = Math.pow(toNum(left) || 0, toNum(right) || 0);
+        }
+        return left;
+      }
+
+      function product() {
+        let left = power();
+        while (atOp('*') || atOp('/')) {
+          const op = tokens[pos].value;
+          pos++;
+          const right = power();
+          const a = toNum(left) || 0;
+          const b = toNum(right) || 0;
+          if (op === '*') left = a * b;
+          else left = b !== 0 ? a / b : '#DIV/0!';
+        }
+        return left;
+      }
+
+      function sum() {
+        let left = product();
+        while (atOp('+') || atOp('-')) {
+          const op = tokens[pos].value;
+          pos++;
+          const right = product();
+          const a = toNum(left) || 0;
+          const b = toNum(right) || 0;
+          left = op === '+' ? a + b : a - b;
+        }
+        return left;
+      }
+
+      function concat() {
+        let left = sum();
+        while (atOp('&')) {
+          pos++;
+          const right = sum();
+          left = String(left ?? '') + String(right ?? '');
+        }
+        return left;
+      }
+
+      function expression() {
+        let left = concat();
+        while (atOp('=') || atOp('<>') || atOp('<') || atOp('>') || atOp('<=') || atOp('>=')) {
+          const op = tokens[pos].value;
+          pos++;
+          const right = concat();
+          if (op === '=') left = left == right;                       // eslint-disable-line eqeqeq
+          else if (op === '<>') left = left != right;                 // eslint-disable-line eqeqeq
+          else if (op === '<') left = (toNum(left) || 0) < (toNum(right) || 0);
+          else if (op === '>') left = (toNum(left) || 0) > (toNum(right) || 0);
+          else if (op === '<=') left = (toNum(left) || 0) <= (toNum(right) || 0);
+          else left = (toNum(left) || 0) >= (toNum(right) || 0);
+        }
+        return left;
+      }
+
+      const value = expression();
+      if (pos < tokens.length) throw new Error('unexpected trailing input');
+      return value;
     }
 
     function getCellValue(r, c, sheetIdx = model.active) {
@@ -2023,10 +2181,15 @@
         if (r >= minR && r <= maxR) delete newStyles[key];
       }
       for (let r = minR; r <= maxR; r++) delete newHeights[r];
+      /* Every row in the range is copied out before any of them is written
+         back. Reading sh.rows[oldR] inside the write loop reads a slot an
+         earlier iteration may already have overwritten, so a sorted range came
+         back with rows duplicated and the ones they displaced lost. */
+      const sorted = order.map((r) => (sh.rows[r] ? sh.rows[r].slice() : []));
       for (let i = 0; i < order.length; i++) {
         const oldR = order[i];
         const newR = minR + i;
-        sh.rows[newR] = sh.rows[oldR] ? sh.rows[oldR].slice() : [];
+        sh.rows[newR] = sorted[i];
         for (const key of Object.keys(oldStyles)) {
           const [rStr, cStr] = key.split(',');
           if (parseInt(rStr, 10) === oldR) newStyles[`${newR},${cStr}`] = oldStyles[key];
@@ -2339,7 +2502,11 @@
           renderTabs();
         },
         evalFormula: (expr, r, c) => evaluateFormula(expr, r || 0, c || 0),
-        sortRange: (asc) => sortSelectedRange(asc)
+        sortRange: (asc) => sortSelectedRange(asc),
+        sortRangeCells: (startR, endR, col, asc) => {
+          selectRange(startR, col, endR, col);
+          sortSelectedRange(asc);
+        }
       }
     };
   }

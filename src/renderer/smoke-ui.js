@@ -711,16 +711,49 @@
       t('sheet formula IF calculates', ed._test.getFormatted(4, 1) === 'Big', ed._test.getFormatted(4, 1));
       ed._test.setCell(5, 1, '=AVERAGE(B2:B3)');
       t('sheet formula AVERAGE calculates', ed._test.getFormatted(5, 1) === '15', ed._test.getFormatted(5, 1));
+      /* setCell takes a row and column index, so (6, 1) is B7 and (6, 2) is
+         C7. These read A6 and B6, which are two rows above the cells the test
+         fills and always empty - so the comparisons passed on 0 <= 0 and the
+         unary-minus check had been failing since it was written. */
       ed._test.setCell(6, 1, '5');
       ed._test.setCell(6, 2, '10');
-      ed._test.setCell(7, 1, '=A6<=B6');
-      ed._test.setCell(7, 2, '=A6<>B6');
-      ed._test.setCell(7, 3, '=-A6');
+      ed._test.setCell(7, 1, '=B7<=C7');
+      ed._test.setCell(7, 2, '=B7<>C7');
+      ed._test.setCell(7, 3, '=-B7');
       ed._test.setCell(8, 1, '=ROUND(1234,-1)');
       t('sheet formula comparisons', ed._test.getFormatted(7, 1) === 'TRUE' && ed._test.getFormatted(7, 2) === 'TRUE',
         `${ed._test.getFormatted(7, 1)} / ${ed._test.getFormatted(7, 2)}`);
       t('sheet formula unary minus', ed._test.getFormatted(7, 3) === '-5', ed._test.getFormatted(7, 3));
       t('sheet formula ROUND negative digits', ed._test.getFormatted(8, 1) === '1230', ed._test.getFormatted(8, 1));
+
+      /* Grouping, a leading sign and more than one call per formula: each of
+         these used to return a plausible number rather than the right one. */
+      const formulaCases = [
+        ['=SUM(B2:B3)+SUM(B2:B3)', '60'],
+        ['=MAX(B2:B3)-MIN(B2:B3)', '10'],
+        ['=(1+2)*3', '9'],
+        ['=B2*(B3+B2)', '300'],
+        ['=-5+3', '-2'],
+        ['=2*-3', '-6'],
+        ['=SUM(B2:B3)/(B2+B3)', '1']
+      ];
+      const formulaBad = [];
+      formulaCases.forEach(([formula, want], i) => {
+        ed._test.setCell(10 + i, 5, formula);
+        const got = ed._test.getFormatted(10 + i, 5);
+        if (got !== want) formulaBad.push(`${formula} => ${got} (want ${want})`);
+      });
+      t('sheet formula grouping, sign and multiple calls', formulaBad.length === 0, formulaBad.join(' | '));
+
+      /* Sorting used to permute the rows in place while still reading from
+         them, so a sorted column came back with values duplicated and the
+         rows they displaced lost. */
+      ed._test.setCell(20, 6, '3');
+      ed._test.setCell(21, 6, '1');
+      ed._test.setCell(22, 6, '2');
+      ed._test.sortRangeCells(20, 22, 6, true);
+      const sorted = [20, 21, 22].map((r) => ed._test.getCell(r, 6)).join(',');
+      t('sheet sort keeps every row', sorted === '1,2,3', sorted);
 
       // Test cell sizing and text size
       ed._test.setColWidth(0, 150);
