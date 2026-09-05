@@ -119,6 +119,9 @@
         pv.el.style.width = w + 'px';
         pv.el.style.height = h + 'px';
         pv.rendered = false;
+        // A page that failed at one size may well draw at another, so a zoom
+        // hands back the attempts a previous size used up.
+        pv.attempts = 0;
       }
       if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
       if (ctx.status) ctx.status.setZoom(zoom, ZOOM_MIN, ZOOM_MAX);
@@ -182,12 +185,38 @@
       });
     }
 
+    /* A render is worth repeating when the zoom moved under it, because the
+       canvas it just filled is the wrong size now. It used to be repeated on
+       failure too, from a finally that only asked whether the page had
+       rendered - so a page that could not be rendered at all was retried the
+       instant it failed, forever, pinning a core for as long as the tab
+       stayed open and never saying why the page was blank. Stale work is
+       still redone; a failing page gets a small budget and is then left
+       alone, with the reason on the page rather than only in the console. */
+    const MAX_RENDER_ATTEMPTS = 3;
+
+    function showPageError(pv, message) {
+      if (!pv || !pv.el) return;
+      let note = pv.el.querySelector('.pdf-page-error');
+      if (!message) {
+        if (note) note.remove();
+        return;
+      }
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'pdf-page-error';
+        pv.el.appendChild(note);
+      }
+      note.textContent = 'This page could not be displayed. ' + message;
+    }
+
     async function renderPage(i) {
       if (destroyed) return;
       const pv = pageViews[i];
       if (!pv || pv.rendered || pv.rendering) return;
       pv.rendering = true;
       const scale = cssScale * dpr();
+      let stale = false;
       try {
         const vp = pv.page.getViewport({ scale });
         pv.canvas.width = Math.floor(vp.width);
@@ -195,19 +224,27 @@
         pv.canvas.style.width = '100%';
         pv.canvas.style.height = '100%';
         await pv.page.render({ canvasContext: pv.canvas.getContext('2d'), viewport: vp }).promise;
-        if (destroyed || !pageViews[i]) return;
-        if (scale !== cssScale * dpr()) {
-          pv.rendered = false;
-        } else {
+        if (destroyed || pageViews[i] !== pv) return;
+        stale = scale !== cssScale * dpr();
+        if (!stale) {
           pv.rendered = true;
           pv.error = null;
+          pv.attempts = 0;
+          showPageError(pv, null);
         }
       } catch (e) {
-        if (!destroyed) pv.error = e && e.message;
+        if (destroyed || pageViews[i] !== pv) return;
+        pv.error = (e && e.message) || String(e);
+        pv.attempts = (pv.attempts || 0) + 1;
       } finally {
         pv.rendering = false;
-        if (!destroyed && pageViews[i] && !pageViews[i].rendered) renderPage(i);
       }
+      if (destroyed || pageViews[i] !== pv || pv.rendered) return;
+      if (stale || pv.attempts < MAX_RENDER_ATTEMPTS) {
+        renderPage(i);
+        return;
+      }
+      showPageError(pv, pv.error || 'The page could not be drawn.');
     }
 
     function updateStatus() {
@@ -900,6 +937,48 @@
         numPages: () => (pdf ? pdf.numPages : 0),
         firstPageRendered: () => !!(pageViews[0] && pageViews[0].rendered && pageViews[0].canvas.width > 50),
         firstPageError: () => (pageViews[0] && pageViews[0].error) || '',
+        /* Stands a page's render up as one that always fails, the way a
+           damaged page behaves, and reports how many times it was attempted
+           before the viewer gave up. The rejection is deferred by a timer
+           because that is how a real render failure arrives - rejecting
+           straight away would starve the timer queue and hang the renderer
+           outright rather than spinning. */
+        renderFailureProbe: async (i) => {
+          const idx = i || 0;
+          const pv = pageViews[idx];
+          if (!pv) return null;
+          const realPage = pv.page;
+          let calls = 0;
+          pv.page = {
+            getViewport: (opts) => realPage.getViewport(opts),
+            render: () => {
+              calls++;
+              return {
+                promise: new Promise((_resolve, reject) => {
+                  setTimeout(() => reject(new Error('forced render failure')), 0);
+                })
+              };
+            }
+          };
+          pv.rendered = false;
+          pv.rendering = false;
+          pv.attempts = 0;
+          showPageError(pv, null);
+          renderPage(idx);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          const result = {
+            calls,
+            noted: !!pv.el.querySelector('.pdf-page-error'),
+            stillRendering: !!pv.rendering
+          };
+          pv.page = realPage;
+          pv.rendered = false;
+          pv.rendering = false;
+          pv.attempts = 0;
+          showPageError(pv, null);
+          renderPage(idx);
+          return result;
+        },
         extract: () => extractImages(),
         placementsCount: () => placements.length,
         addTestSignature: (dataUrl) => addPlacement({ pageIndex: 0, xr: 0.55, yr: 0.75, wr: 0.3, hr: 0.1, dataUrl })

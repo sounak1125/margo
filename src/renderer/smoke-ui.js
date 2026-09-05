@@ -853,6 +853,21 @@
       t('pdf pages loaded', ped._test.numPages() === 2, `pages=${ped._test.numPages()}`);
       for (let i = 0; i < 60 && !ped._test.firstPageRendered(); i++) await wait(150);
       t('pdf first page rendered', ped._test.firstPageRendered(), ped._test.firstPageError());
+
+      /* A failed render used to be retried from a finally that only asked
+         whether the page had rendered, so a page that could never render was
+         retried without limit for as long as the tab stayed open. */
+      if (ped._test.renderFailureProbe) {
+        const probe = await ped._test.renderFailureProbe(0);
+        t('pdf render failure stops retrying',
+          !!probe && probe.calls > 0 && probe.calls <= 3 && !probe.stillRendering,
+          probe ? `${probe.calls} attempts, rendering=${probe.stillRendering}` : 'no probe');
+        t('pdf render failure explains itself on the page', !!(probe && probe.noted));
+        for (let i = 0; i < 60 && !ped._test.firstPageRendered(); i++) await wait(150);
+        t('pdf page recovers after a forced failure', ped._test.firstPageRendered(),
+          ped._test.firstPageError());
+      }
+
       if (ped.commands && ped.commands.find) await ped.commands.find();
       await wait(80);
       t('pdf find bar opens', !!document.querySelector('.tab-pane:not([hidden]) .pdf-scroll') &&

@@ -2239,6 +2239,15 @@ table.sheet-grid { border-collapse: separate; border-spacing: 0; font-size: 12.5
 }
 .pdf-page canvas { display: block; border-radius: 3px; }
 .pdf-overlay { position: absolute; inset: 0; }
+/* Sits on the sheet itself, which is white in every theme, so it is coloured
+   against the page rather than against the app chrome. */
+.pdf-page-error {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 32px;
+  text-align: center; font-size: 12.5px; line-height: 1.55;
+  color: #9a4b44; background: #fff; border-radius: 3px;
+}
 .pdf-find-hit {
   position: absolute;
   background: rgba(253, 230, 138, 0.55);
