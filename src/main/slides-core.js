@@ -315,6 +315,22 @@
   }
   const SHAPES = ['rect', 'roundRect', 'ellipse', 'triangle', 'diamond', 'line', 'arrow'];
 
+  /* A theme's colours are written straight into style="" attributes of the
+     slide markup, and the deck JSON Margo keeps inside a .pptx can come from
+     anyone (its fingerprint is no secret), so only real colours survive; font
+     names are cleaned where they are used (fontCss). */
+  function cleanTheme(raw) {
+    const t = {};
+    Object.keys(THEMES[0]).forEach((k) => {
+      if (k === 'id' || !(k in raw)) return;
+      const v = raw[k];
+      if (k === 'titleBold') t[k] = !!v;
+      else if (k === 'name' || k === 'titleFont' || k === 'bodyFont') { if (v == null || typeof v === 'string') t[k] = v; }
+      else if (normHex(v)) t[k] = normHex(v);
+    });
+    return t;
+  }
+
   function normalizeDeck(raw) {
     const d = raw && typeof raw === 'object' ? raw : {};
     const size = d.size && num(d.size.w, 0) > 0 && num(d.size.h, 0) > 0
@@ -325,7 +341,7 @@
       size,
       slides: []
     };
-    if (d.customTheme && typeof d.customTheme === 'object') deck.customTheme = clone(d.customTheme);
+    if (d.customTheme && typeof d.customTheme === 'object') deck.customTheme = cleanTheme(d.customTheme);
     if (deck.theme === 'custom' && !deck.customTheme) deck.theme = 'margo';
     if (deck.theme !== 'custom' && !THEMES.some((t) => t.id === deck.theme)) deck.theme = 'margo';
     (Array.isArray(d.slides) ? d.slides : []).forEach((s) => {

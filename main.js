@@ -516,6 +516,15 @@ if (!gotLock) {
       callback(ALLOWED_PERMISSIONS.has(permission));
     });
     ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
+    /* No window may reach a network host through a UNC file: URL (see
+       access.fileUrlAllowed). Margo's own files and its temp pages always
+       load, even when Margo itself runs from a network share. */
+    const { pathToFileURL } = require('url');
+    const ownUrls = [__dirname, require('os').tmpdir()].map((d) => pathToFileURL(d + path.sep).href);
+    ses.webRequest.onBeforeRequest({ urls: ['file://*/*'] }, (details, callback) => {
+      const own = ownUrls.some((u) => details.url.startsWith(u));
+      callback({ cancel: !own && !access.fileUrlAllowed(details.url) });
+    });
 
     if (SMOKE) {
       try { drafts.clear(); } catch {}
@@ -771,6 +780,25 @@ function queueThumbJob(job) {
 
 const clampDim = (v, def) => Math.min(2000, Math.max(1, Math.round(Number(v) || def)));
 
+/* A hidden window has often not produced its first frame yet when loadFile
+   resolves, and since Electron 38 capturePage then rejects (UnknownVizError)
+   instead of waiting for one. A frame follows within a few tens of ms. */
+async function captureHidden(w) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (w.isDestroyed()) break;
+    try {
+      const img = await w.capturePage();
+      if (!img.isEmpty()) return img;
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (lastErr) throw lastErr;
+  return nativeImage.createEmpty();
+}
+
 ipcMain.handle('thumbs:render-html', (_e, req) => queueThumbJob(async () => {
   const r = plainObject(req) || {};
   const width = clampDim(r.width, 440);
@@ -782,7 +810,7 @@ ipcMain.handle('thumbs:render-html', (_e, req) => queueThumbJob(async () => {
     await fs.promises.writeFile(tmp, printing.injectCsp(html), { encoding: 'utf8', mode: 0o600 });
     const w = thumbWindow(width, height);
     await w.loadFile(tmp);
-    let img = await w.capturePage();
+    let img = await captureHidden(w);
     if (img.isEmpty()) return { ok: false, error: 'Thumbnail came back blank' };
     /* capturePage hands back physical pixels, so on a scaled display the image
        would be larger than the card the caller asked for. */

@@ -2310,7 +2310,8 @@
   function toRangeObj(v) {
     if (!v) return null;
     if (typeof v === 'string') return parseA1Range(v);
-    if (typeof v.r1 === 'number') return { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
+    // Ranges end up in markup (rangeName), and a workbook's metadata sheet can say anything.
+    if ([v.r1, v.c1, v.r2, v.c2].every(Number.isInteger)) return { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
     return null;
   }
 
@@ -2774,7 +2775,8 @@
           }
         }
       }
-      return `<div class="${cls}" style="${css}"><span>${escapeHtml(text)}</span></div>`;
+      // Styles can come from a workbook's own XML or Margo's metadata sheet in it.
+      return `<div class="${escapeHtml(cls)}" style="${escapeHtml(css)}"><span>${escapeHtml(text)}</span></div>`;
     }
 
     function quadCells(rows, cols, ox, oy) {
@@ -4591,7 +4593,7 @@
           row.className = 'sheet-cf-rule';
           const label = (CF_TYPES.find(([v]) => v === rule.type) || [0, rule.type])[1];
           const sw = rule.type === 'scale' ? `linear-gradient(90deg, ${rule.minColor}, ${rule.maxColor})` : ((rule.style && rule.style.fill) || 'transparent');
-          row.innerHTML = `<span class="sheet-swatch" style="background:${sw}"></span><span>${rangeName(rule.range)} · ${escapeHtml(label)}${rule.v1 != null && rule.v1 !== '' ? ' ' + escapeHtml(rule.v1) : ''}${rule.type === 'between' ? ' – ' + escapeHtml(rule.v2 || '') : ''}</span>`;
+          row.innerHTML = `<span class="sheet-swatch" style="background:${escapeHtml(sw)}"></span><span>${escapeHtml(rangeName(rule.range))} · ${escapeHtml(label)}${rule.v1 != null && rule.v1 !== '' ? ' ' + escapeHtml(rule.v1) : ''}${rule.type === 'between' ? ' – ' + escapeHtml(rule.v2 || '') : ''}</span>`;
           const del = Object.assign(document.createElement('button'), { type: 'button', className: 'sheet-icon-btn', title: 'Delete rule', innerHTML: ICON('trash') });
           del.addEventListener('click', () => { mutate(() => { sheet().condFormats.splice(i, 1); }); paintList(); });
           row.appendChild(del);
