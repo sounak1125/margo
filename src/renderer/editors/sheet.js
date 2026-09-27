@@ -3312,7 +3312,8 @@
       if (value !== ed.original && !passesValidation(ed.r, ed.c, value)) {
         const v = validationAt(ed.r, ed.c);
         if (v && v.strict !== false) {
-          ctx.toast(v.message || `"${value}" is not an allowed value for ${cellName(ed.r, ed.c)}.`, 'error');
+          if (o.force) { cancelEdit(); return false; }
+          ctx.toast(v.message || `"${value}" is not an allowed value for ${cellName(ed.r, ed.c)} — pick from the list or press Esc.`, 'error');
           (ed.source === 'bar' ? formulaInput : editorEl).focus();
           return false;
         }
@@ -4061,7 +4062,7 @@
       marching = true;
       writeClipboard(text, html);
       renderNow();
-      ctx.toast(cut ? 'Cut — paste to move' : `Copied ${rangeName(rg)}`);
+      if (cut) ctx.toast('Cut — paste where the cells should go');
     }
     function writeClipboard(text, html) {
       let done = false;
@@ -4163,7 +4164,7 @@
     }
     function pasteData(data, opts) {
       const o = opts || {};
-      if (editing) commitEdit({ keepFocus: true });
+      if (editing) commitEdit({ keepFocus: true, force: true });
       const text = data.text || '';
       if (clip && (normNL(text) === normNL(clip.text) || (!text && !data.html))) {
         pasteInternal(o);
@@ -5425,7 +5426,7 @@
     }
     function switchSheet(i) {
       if (i === model.active || i < 0 || i >= model.sheets.length) return;
-      if (editing && !commitEdit({ keepFocus: true })) return;
+      if (editing) commitEdit({ keepFocus: true, force: true });
       model.active = i;
       sel = { r: 0, c: 0 }; selEnd = null;
       gridScroll.scrollTop = 0; gridScroll.scrollLeft = 0;
@@ -5993,7 +5994,7 @@
       history.undo(restoreSheet);
     }
     function redo() {
-      if (editing) commitEdit({ keepFocus: true });
+      if (editing) commitEdit({ keepFocus: true, force: true });
       history.redo(restoreSheet);
     }
 
@@ -6178,7 +6179,7 @@
     }
     let dataMemo = null;
     function getData() {
-      if (editing) commitEdit({ keepFocus: true });
+      if (editing) commitEdit({ keepFocus: true, force: true });
       // Nothing changed since the last call (a draft save right after a
       // thumbnail, say): the computed half is still good.
       const memo = dataMemo && dataMemo.gen === recalcCount && dataMemo.sheets === model.sheets ? dataMemo : null;
@@ -6344,7 +6345,7 @@
         addCondFormat: (rule) => mutate(() => { sheet().condFormats.push({ ...rule, range: toRangeObj(rule.range) }); }),
         cellCss: (r, c) => cfStyleFor(r, c),
         addValidation: (rule) => mutate(() => { sheet().validations.push({ ...rule, range: toRangeObj(rule.range) }); }),
-        typeInto: (r, c, text) => { select(r, c); beginEdit(text, { mode: 'enter' }); return commitEdit({ keepFocus: true }); },
+        typeInto: (r, c, text) => { select(r, c); beginEdit(text, { mode: 'enter' }); const ok = commitEdit({ keepFocus: true }); if (!ok) cancelEdit(); return ok; },
         undo: () => undo(),
         redo: () => redo(),
         status: () => statusText(),

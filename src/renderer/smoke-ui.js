@@ -1212,6 +1212,237 @@
           !!symChar && symBody.textContent !== textBefore && symBody.textContent.indexOf(symChar) >= 0,
           `${symChar} :: ${symBody.textContent.slice(-24)}`);
       }
+      /* Word processor features, in a fresh document of their own so the
+         sample document's later save and export checks see it unchanged. */
+      {
+        const prevTabId = T.state.activeTabId;
+        await T.newDoc('doc');
+        await wait(250);
+        const fed = T.getEditor();
+        const F = fed && fed._test;
+        const fpane = document.querySelector('.tab-pane:not([hidden])');
+        let fb = fpane && fpane.querySelector('.doc-page-body');
+        const selNode = (node, a, b) => {
+          const rr = document.createRange();
+          if (b === undefined) rr.selectNodeContents(node); else { rr.setStart(node, a); rr.setEnd(node, b); }
+          const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr);
+        };
+        const caretAt = (node, off) => {
+          const rr = document.createRange(); rr.setStart(node, off || 0); rr.collapse(true);
+          const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr);
+        };
+        if (F && fb) {
+          const tabs = [...fpane.querySelectorAll('.doc-ribbon-tab')];
+          t('doc feature: ribbon has Home, Insert, Layout, References, Review, View',
+            ['Home', 'Insert', 'Layout', 'References', 'Review', 'View'].every((n) => tabs.some((b) => b.textContent === n && !b.classList.contains('hidden'))),
+            tabs.map((b) => b.textContent).join(','));
+          t('doc feature: ribbon buttons are drawn icons, not letters',
+            [...fpane.querySelectorAll('.doc-ribbon .icon-btn')].every((b) => !!b.querySelector('svg')));
+          t('doc feature: Table tab hidden outside a table',
+            !!fpane.querySelector('.doc-ribbon-tab.is-contextual.hidden'));
+
+          // paragraph styles
+          fb.innerHTML = '<p>Heading here</p><p>Body one</p><p>Body two</p>';
+          selNode(fb.children[0]);
+          F.applyStyle('title');
+          t('doc feature: Title style', !!fb.querySelector('p.margo-title'), fb.innerHTML.slice(0, 120));
+          selNode(fb.children[0]);
+          F.applyStyle('h2');
+          t('doc feature: Heading 2 style replaces Title', !!fb.querySelector('h2') && !fb.querySelector('.margo-title'), fb.innerHTML.slice(0, 120));
+          selNode(fb.children[1]);
+          F.applyStyle('quote');
+          t('doc feature: Quote style', !!fb.querySelector('blockquote'), fb.innerHTML.slice(0, 160));
+          selNode(fb.querySelector('blockquote'));
+          F.applyStyle('p');
+          t('doc feature: back to Normal', !fb.querySelector('blockquote'), fb.innerHTML.slice(0, 160));
+
+          // spacing, indent
+          fb.innerHTML = '<p>one</p><p>two</p><p>three</p>';
+          { const rr = document.createRange(); rr.setStart(fb.children[0].firstChild, 1); rr.setEnd(fb.children[2].firstChild, 2); const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr); }
+          F.lineSpacing('1.5');
+          F.paraSpacing('before', 6);
+          t('doc feature: line and paragraph spacing reach every selected paragraph',
+            [...fb.children].every((p) => p.style.lineHeight === '1.5' && p.style.marginTop === '6pt'), fb.innerHTML.slice(0, 200));
+          selNode(fb.children[1]);
+          F.indent(1);
+          t('doc feature: indent moves the paragraph, not into a quote',
+            fb.children[1].style.marginLeft === '36pt' && !fb.querySelector('blockquote'), fb.innerHTML.slice(0, 200));
+
+          // checklist
+          fb.innerHTML = '<p>task</p>';
+          selNode(fb.firstChild);
+          F.toggleList('check');
+          const cli = fb.querySelector('ul.margo-checklist > li');
+          t('doc feature: checklist', !!cli, fb.innerHTML);
+          if (cli) {
+            const rc = cli.getBoundingClientRect();
+            cli.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rc.left - 8, clientY: rc.top + 5, button: 0 }));
+            t('doc feature: clicking the box ticks the item', cli.classList.contains('is-checked'), cli.outerHTML);
+          }
+
+          // highlight and case keep other formatting
+          fb.innerHTML = '<p>hello brave <b>new</b> world</p>';
+          selNode(fb.firstChild.firstChild, 6, 11);
+          F.highlight('#ffff00');
+          t('doc feature: partial highlight', !!fb.querySelector('mark.hl-yellow') && fb.querySelector('mark').textContent === 'brave', fb.innerHTML);
+          selNode(fb.firstChild);
+          F.changeCase('upper');
+          t('doc feature: change case keeps bold and highlight', fb.textContent === 'HELLO BRAVE NEW WORLD' && !!fb.querySelector('b') && !!fb.querySelector('mark'), fb.innerHTML);
+
+          // tables
+          fb.innerHTML = '<p>above</p><p>below</p>';
+          caretAt(fb.children[0].firstChild, 5);
+          F.insertTable(2, 2);
+          const tbl = fb.querySelector('table');
+          t('doc feature: insert 2x2 table', !!tbl && tbl.querySelectorAll('td').length === 4);
+          if (tbl) {
+            t('doc feature: Table tab appears in a table', await (async () => { await wait(40); fed.focus(); return !fpane.querySelector('.doc-ribbon-tab.is-contextual').classList.contains('hidden'); })());
+            caretAt(tbl.querySelector('td'), 0);
+            F.insertRow('below'); F.insertCol('right');
+            t('doc feature: add row and column', tbl.querySelectorAll('tr').length === 3 && tbl.querySelector('tr').children.length === 3, tbl.outerHTML.slice(0, 200));
+            { const tds = tbl.querySelectorAll('tr')[0].children; tds[0].textContent = 'A'; tds[1].textContent = 'B'; const rr = document.createRange(); rr.setStart(tds[0].firstChild, 0); rr.setEnd(tds[1].firstChild, 1); const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr); }
+            F.mergeCells();
+            t('doc feature: merge cells', !!tbl.querySelector('td[colspan="2"]'), tbl.outerHTML.slice(0, 200));
+            caretAt(tbl.querySelector('td[colspan="2"]'), 0);
+            F.splitCell();
+            t('doc feature: split merged cell', !tbl.querySelector('tr').querySelector('[colspan]') && tbl.querySelector('tr').children.length === 3);
+            caretAt(tbl.querySelector('td'), 0);
+            F.headerRow();
+            F.borders('outer');
+            t('doc feature: header row and outside borders', !!tbl.querySelector('thead th') && tbl.classList.contains('margo-tbl-outer'), tbl.outerHTML.slice(0, 200));
+            caretAt(tbl.querySelector('tbody td'), 0);
+            F.deleteRow(); F.deleteCol();
+            t('doc feature: delete row and column', tbl.querySelectorAll('tr').length === 2 && tbl.querySelector('tr').children.length === 2, tbl.outerHTML.slice(0, 200));
+          }
+
+          // page break at the caret, and Backspace takes it out again
+          fb.innerHTML = '<p>First page</p><p>Second page</p>';
+          const pagesBefore = F.pageCount();
+          caretAt(fb.children[1].firstChild, 0);
+          F.pageBreak();
+          const pg = fpane.querySelectorAll('.doc-page');
+          t('doc feature: page break splits at the caret',
+            F.pageCount() === pagesBefore + 1 && pg[1] && /Second page/.test(pg[1].textContent) && !/Second page/.test(pg[0].querySelector('.doc-page-body').textContent),
+            `${pagesBefore} -> ${F.pageCount()}`);
+          const b2 = pg[1] && pg[1].querySelector('.doc-page-body');
+          if (b2) {
+            b2.focus();
+            caretAt(b2.querySelector('p').firstChild, 0);
+            b2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+            t('doc feature: Backspace at the top of a page removes the break',
+              F.pageCount() === pagesBefore && !/data-margo-page-break/.test(fed.getData().html), fed.getData().html.slice(0, 160));
+            F.undo();
+            await wait(30);
+            t('doc feature: undo brings the break back', /data-margo-page-break/.test(fed.getData().html));
+            const sel2 = window.getSelection();
+            t('doc feature: undo puts the caret back in the text',
+              !!(sel2.rangeCount && sel2.anchorNode && sel2.anchorNode.parentElement && sel2.anchorNode.parentElement.closest('.doc-page-body')));
+          }
+
+          // table of contents and footnotes
+          fb = fpane.querySelector('.doc-page-body');
+          fb.innerHTML = '<h1>Alpha</h1><p>x</p><h2>Beta</h2><p>y z</p>';
+          caretAt(fb.firstChild.firstChild, 0);
+          F.insertToc();
+          const toc = fpane.querySelector('.margo-toc');
+          t('doc feature: table of contents lists the headings with pages',
+            !!toc && toc.querySelectorAll('.margo-toc-entry').length === 2 && /Alpha/.test(toc.textContent) && !!toc.querySelector('.margo-toc-page'),
+            toc ? toc.outerHTML.slice(0, 200) : 'none');
+          const lastP = [...fb.querySelectorAll('p')].pop();
+          caretAt(lastP.firstChild, 1);
+          F.insertFootnote();
+          await wait(40);
+          t('doc feature: footnote reference and note',
+            !!fpane.querySelector('sup.margo-fn-ref') && !!fpane.querySelector('.margo-footnotes li'));
+
+          // find options and replace all
+          fb = fpane.querySelector('.doc-page-body');
+          fb.innerHTML = '<p>Cat cat catalog <b>ca</b>t</p>';
+          F.setFindOption('wholeWord', true);
+          F.runFind('cat');
+          t('doc feature: find whole word across formatting', F.findHits() === 3, String(F.findHits()));
+          F.setFindOption('matchCase', true);
+          F.runFind('cat');
+          t('doc feature: find match case', F.findHits() === 2, String(F.findHits()));
+          F.setFindOption('matchCase', false); F.setFindOption('wholeWord', false); F.setFindOption('regex', true);
+          F.runFind('cat\\w+');
+          t('doc feature: find regular expression', F.findHits() === 1, String(F.findHits()));
+          F.setFindOption('regex', false);
+          fed.commands.find();
+          await wait(40);
+          const fbar = fpane.querySelector('.doc-find-bar');
+          fbar.querySelector('.doc-find-input').value = 'cat';
+          fbar.querySelector('.doc-find-input').dispatchEvent(new Event('input', { bubbles: true }));
+          fbar.querySelector('.doc-replace-input').value = 'dog';
+          F.replaceAll();
+          t('doc feature: replace all', !/cat/i.test(fb.textContent.replace(/catalog/i, '')) && /dog/.test(fb.textContent), fb.textContent);
+          fbar.querySelector('.doc-find-close').click();
+
+          // paste clean-up
+          const cleaned = F.cleanPaste('<p class=MsoNormal style="mso-fareast-font-family:Calibri;color:black"><b>Bold</b><o:p></o:p></p><p style="mso-list:l0 level1 lfo1"><span style="mso-list:Ignore">·<span> </span></span>Item</p>');
+          t('doc feature: paste from Word is cleaned', !/mso|Mso|o:p/.test(cleaned) && /<ul><li>Item<\/li><\/ul>/.test(cleaned) && /<b>Bold<\/b>/.test(cleaned), cleaned);
+
+          // format painter
+          fb.innerHTML = '<p><b><i>src</i></b> target</p>';
+          caretAt(fb.querySelector('i').firstChild, 1);
+          const fmt = F.captureFormat();
+          { const tn = fb.firstChild.lastChild; selNode(tn, 1, 7); }
+          F.applyFormat(fmt);
+          t('doc feature: format painter copies bold and italic', fb.querySelectorAll('b, strong').length >= 2 && fb.querySelectorAll('i, em').length >= 2, fb.innerHTML);
+
+          // pictures
+          fb.innerHTML = '<p>pic </p>';
+          caretAt(fb.firstChild.firstChild, 4);
+          F.paste('<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="dot" style="width:40px;height:30px">');
+          const im = fb.querySelector('img');
+          t('doc feature: picture pasted', !!im);
+          if (im) {
+            F.selectImage(im);
+            const ov = F.imageOverlay();
+            t('doc feature: picture tools appear', !!(ov && ov.querySelector('.doc-img-handle.h-se') && ov.querySelector('.doc-img-bar')));
+            ov.querySelector('[data-img-align="center"]').click();
+            t('doc feature: picture centred', im.closest('p').style.textAlign === 'center');
+            t('doc feature: picture tools never reach the file', !/doc-img|is-selected/.test(fed.getData().html));
+          }
+
+          // header, footer, page numbers, status
+          F.setLayout({ headerText: 'Report', footerText: 'Confidential', showPageNumbers: true });
+          t('doc feature: header and footer drawn in the margins',
+            /Report/.test(fpane.querySelector('.doc-page-header').textContent) && /Page 1 of/.test(fpane.querySelector('.doc-page-footer').textContent));
+          t('doc feature: status line', /^[\d,]+ words? · [\d,]+ characters? · Page \d+ of \d+$/.test(fed.commands.status()), fed.commands.status());
+          F.setSpellcheck(false);
+          t('doc feature: spell check can be turned off', [...fpane.querySelectorAll('.doc-page-body')].every((b) => b.spellcheck === false));
+          F.setSpellcheck(true);
+
+          // and everything above survives Save as .docx and reopening
+          fb.innerHTML = '<p class="margo-title">Saved</p><ul class="margo-checklist"><li class="is-checked">Done</li></ul>' +
+            '<table style="width:100%"><thead><tr><th>H</th></tr></thead><tbody><tr><td>c</td></tr></tbody></table>' +
+            '<p>ref</p>';
+          caretAt(fb.lastChild.firstChild, 3);
+          F.insertFootnote();
+          await wait(40);
+          const rs = await T.saveTo(joinTmp('ui-features.docx'));
+          t('doc feature: save as docx', rs && rs.ok, rs && rs.error);
+          if (rs && rs.ok) {
+            T.state.dirty = false;
+            await T.closeTab(T.state.activeTabId);
+            await T.openFromPath(joinTmp('ui-features.docx'));
+            await wait(300);
+            const rp = document.querySelector('.tab-pane:not([hidden])');
+            const html2 = rp ? rp.querySelector('.doc-pages').innerHTML : '';
+            t('doc feature: docx reopen keeps title, checklist, header row, footnote',
+              /margo-title/.test(html2) && /margo-checklist[\s\S]*is-checked/.test(html2) && /<th/.test(html2) && /margo-fn-ref/.test(html2),
+              html2.slice(0, 300));
+            const lay = T.getEditor()._test.layout();
+            t('doc feature: docx reopen keeps header, footer and page numbers',
+              lay.headerText === 'Report' && lay.footerText === 'Confidential' && lay.showPageNumbers === true, JSON.stringify(lay));
+          }
+        }
+        T.state.dirty = false;
+        if (T.state.activeTabId && T.state.activeTabId !== prevTabId) await T.closeTab(T.state.activeTabId);
+        if (prevTabId && T.activateTab) await T.activateTab(prevTabId);
+        await wait(60);
+      }
       // themed save modal (Don't Save)
       T.state.dirty = true;
       const dirtyPromise = T.resolveDirty();
