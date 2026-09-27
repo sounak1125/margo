@@ -1360,6 +1360,8 @@
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
       const body = node && pageBodyOf(node);
       const li = el && el.closest('li');
+      // The footnotes block is a numbered list Margo keeps, not the author's.
+      if (li && li.closest('.margo-footnotes')) return null;
       return li && body && body.contains(li) ? li.parentElement : null;
     }
 
