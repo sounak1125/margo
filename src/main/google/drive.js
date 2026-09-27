@@ -4,7 +4,7 @@ const path = require('path');
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const MAX_OPEN_BYTES = 500 * 1024 * 1024;
-const OPEN_EXTS = ['.md', '.markdown', '.txt', '.docx', '.xlsx', '.csv', '.pdf'];
+const OPEN_EXTS = ['.md', '.markdown', '.txt', '.docx', '.xlsx', '.csv', '.pdf', '.pptx'];
 
 function mimeOf(filePath) {
   const ext = path.extname(filePath || '').toLowerCase();
@@ -14,7 +14,12 @@ function mimeOf(filePath) {
   if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   if (ext === '.csv') return 'text/csv';
   if (ext === '.pdf') return 'application/pdf';
+  if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   return 'application/octet-stream';
+}
+
+function isDriveId(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id);
 }
 
 function isOpenableName(name) {
@@ -36,9 +41,31 @@ function apiRole(ui) {
   return 'reader';
 }
 
-async function driveFetch(token, url, opts) {
+const API_TIMEOUT_MS = 60 * 1000;
+const TRANSFER_TIMEOUT_MS = 15 * 60 * 1000;
+
+/* fetch() has no timeout of its own, so a request that stalled on a dropped
+   connection left Share, Open from Drive or the save-time push spinning
+   forever. Network failures also surfaced as a bare "fetch failed". */
+async function timedFetch(url, opts, timeoutMs) {
+  try {
+    return await fetch(url, Object.assign({}, opts, { signal: AbortSignal.timeout(timeoutMs) }));
+  } catch (err) {
+    const name = err && err.name;
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      const e = new Error('Google Drive did not respond in time. Check your connection and try again.');
+      e.code = 'ETIMEDOUT';
+      throw e;
+    }
+    const e = new Error('Could not reach Google Drive. Check your connection and try again.');
+    e.code = (err && err.cause && err.cause.code) || 'ENETWORK';
+    throw e;
+  }
+}
+
+async function driveFetch(token, url, opts, timeoutMs) {
   const headers = Object.assign({ Authorization: 'Bearer ' + token }, (opts && opts.headers) || {});
-  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  const res = await timedFetch(url, Object.assign({}, opts, { headers }), timeoutMs || API_TIMEOUT_MS);
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
@@ -52,7 +79,7 @@ async function driveFetch(token, url, opts) {
 }
 
 async function driveDownload(token, url) {
-  const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  const res = await timedFetch(url, { headers: { Authorization: 'Bearer ' + token } }, TRANSFER_TIMEOUT_MS);
   if (!res.ok) {
     const text = await res.text();
     let json = null;
@@ -103,7 +130,7 @@ async function ensureFolder(token, existingId) {
 async function getFile(token, fileId) {
   return driveFetch(
     token,
-    DRIVE + '/files/' + encodeURIComponent(fileId) + '?fields=id,name,webViewLink,trashed'
+    DRIVE + '/files/' + encodeURIComponent(fileId) + '?fields=id,name,mimeType,size,webViewLink,trashed'
   );
 }
 
@@ -134,7 +161,7 @@ async function createFile(token, { name, mime, buf, folderId }) {
     method: 'POST',
     headers: { 'Content-Type': pack.contentType },
     body: pack.body
-  });
+  }, TRANSFER_TIMEOUT_MS);
 }
 
 async function updateFile(token, fileId, { name, mime, buf }) {
@@ -146,7 +173,8 @@ async function updateFile(token, fileId, { name, mime, buf }) {
       method: 'PATCH',
       headers: { 'Content-Type': pack.contentType },
       body: pack.body
-    }
+    },
+    TRANSFER_TIMEOUT_MS
   );
 }
 
@@ -220,6 +248,7 @@ async function removePermission(token, fileId, permissionId) {
 module.exports = {
   mimeOf,
   isOpenableName,
+  isDriveId,
   apiRole,
   ensureFolder,
   getFile,

@@ -24,6 +24,7 @@
     let weight = 400;
     if (lower.includes('thin') || lower.includes('hairline')) weight = 100;
     else if (lower.includes('extralight') || lower.includes('ultralight')) weight = 200;
+    else if (lower.includes('semilight') || lower.includes('demilight')) weight = 350;
     else if (lower.includes('light')) weight = 300;
     else if (lower.includes('medium')) weight = 500;
     else if (lower.includes('semibold') || lower.includes('demibold')) weight = 600;
@@ -160,7 +161,18 @@
       o.style.fontFamily = `"${f}", sans-serif`;
       select.appendChild(o);
     });
-    if (list.includes(keep)) select.value = keep;
+    /* A document set in a font this machine does not have (a .docx from
+       another computer) used to show Calibri here, as if the text were in
+       Calibri; it now shows its real family, which the author can keep or
+       change. */
+    if (current && keep && !list.includes(keep)) {
+      const o = document.createElement('option');
+      o.value = keep;
+      o.textContent = keep + ' (not installed)';
+      o.dataset.missing = '1';
+      select.insertBefore(o, select.firstChild);
+      select.value = keep;
+    } else if (list.includes(keep)) select.value = keep;
     else if (list.includes('Calibri')) select.value = 'Calibri';
     else if (list[0]) select.value = list[0];
   }

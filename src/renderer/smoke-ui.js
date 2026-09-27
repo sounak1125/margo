@@ -9,9 +9,429 @@
     try { await window.margo.smoke.capture(name); } catch {}
   }
 
+  /* ---------------- shell: palette, settings, templates, shortcuts ---------------- */
+  async function shellSuite(T, cfg, joinTmp) {
+    const key = (k, extra) => document.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, extra || {})));
+    const backdrop = document.getElementById('modal-backdrop');
+    const modalOpen = () => !backdrop.classList.contains('hidden');
+    const pane = () => document.querySelector('.tab-pane:not([hidden])');
+    T.resetSession();
+    await T.openFromPath(cfg.welcomePath);
+    T.state.dirty = false;
+    T.showLanding();
+    await wait(80);
+
+    /* command palette */
+    key('k', { ctrlKey: true });
+    await wait(60);
+    t('shell: Ctrl+K opens the command palette', T.palette.isOpen());
+    const input = document.getElementById('palette-input');
+    t('shell: palette input takes focus', document.activeElement === input);
+    t('shell: palette lists recent files and commands',
+      T.palette.entries().some((e) => e.type === 'file') && T.palette.entries().some((e) => e.type === 'command'),
+      T.palette.entries().slice(0, 4).map((e) => e.type + ':' + e.label).join(' | '));
+    const query = async (q) => {
+      input.value = q;
+      input.dispatchEvent(new Event('input'));
+      await wait(20);
+      return T.palette.entries();
+    };
+    let hits = await query('kbd shortcuts');
+    t('shell: palette fuzzy-matches a command', hits.length && /Keyboard Shortcuts/.test(hits[0].label),
+      hits.slice(0, 3).map((e) => e.label).join(' | '));
+    hits = await query('wlcm');
+    t('shell: palette fuzzy-matches a recent file', hits.some((e) => e.type === 'file' && /welcome/i.test(e.label)),
+      hits.slice(0, 3).map((e) => e.label).join(' | '));
+    hits = await query('zzqqxx');
+    t('shell: palette shows an empty state', hits.length === 0 && !!document.querySelector('.palette-empty'));
+    hits = await query('theme nord');
+    t('shell: palette reaches submenu items', hits.length && hits[0].label === 'Theme: Nord',
+      hits.slice(0, 3).map((e) => e.label).join(' | '));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await wait(60);
+    t('shell: Enter runs the command and closes the palette',
+      document.documentElement.dataset.theme === 'nord' && !T.palette.isOpen(),
+      `theme=${document.documentElement.dataset.theme} open=${T.palette.isOpen()}`);
+    T.applyTheme('light', true);
+    key('P', { ctrlKey: true, shiftKey: true });
+    await wait(40);
+    t('shell: Ctrl+Shift+P opens the palette too', T.palette.isOpen());
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await wait(30);
+    t('shell: Escape closes the palette', !T.palette.isOpen());
+    const fz = T.palette.fuzzy('svas', 'Save As…');
+    t('shell: fuzzy match is a subsequence match', !!fz && fz.idx.length === 4 && !T.palette.fuzzy('xyz', 'Save As…'));
+
+    /* keyboard shortcuts dialog */
+    key('/', { ctrlKey: true });
+    await wait(60);
+    const scTitle = document.getElementById('modal-title').textContent;
+    const allRows = document.querySelectorAll('#modal-body .shortcut-row').length;
+    t('shell: Ctrl+/ opens keyboard shortcuts', modalOpen() && scTitle === 'Keyboard shortcuts' && allRows > 20,
+      `${scTitle} rows=${allRows}`);
+    const scSearch = document.querySelector('#modal-body input[type="search"]');
+    if (scSearch) {
+      scSearch.value = 'palette';
+      scSearch.dispatchEvent(new Event('input'));
+      await wait(20);
+    }
+    const fewer = document.querySelectorAll('#modal-body .shortcut-row').length;
+    t('shell: shortcut search filters the list', fewer >= 1 && fewer < allRows, `${fewer}/${allRows}`);
+    key('Escape');
+    await wait(40);
+    t('shell: shortcuts dialog closes on Escape', !modalOpen());
+
+    /* settings: every control persists and applies */
+    const before = T.settings.get();
+    await T.showSettings();
+    await wait(80);
+    t('shell: settings has its sections',
+      ['appearance', 'editing', 'files', 'account', 'about'].every((p) => document.querySelector(`.settings-nav button[data-page="${p}"]`)));
+    t('shell: settings theme picker lists every theme',
+      document.querySelectorAll('.theme-card').length === window.MargoThemes.list.length && window.MargoThemes.list.length >= 7,
+      String(document.querySelectorAll('.theme-card').length));
+    document.querySelector('.theme-card[data-theme="rose"]').click();
+    await wait(20);
+    t('shell: theme card applies the theme', document.documentElement.dataset.theme === 'rose'
+      && document.querySelector('.theme-card[data-theme="rose"]').classList.contains('active'));
+    const compact = document.querySelector('.settings-page[data-page="appearance"] .segmented button[data-value="compact"]');
+    if (compact) compact.click();
+    const autosaveSwitch = document.querySelector('.settings-page[data-page="files"] input.switch');
+    if (autosaveSwitch) autosaveSwitch.click();
+    const kindSel = document.querySelector('.settings-page[data-page="editing"] select');
+    if (kindSel) {
+      kindSel.value = 'sheet';
+      kindSel.dispatchEvent(new Event('change'));
+    }
+    await wait(20);
+    let stored = {};
+    try { stored = JSON.parse(localStorage.getItem(T.settings.key) || '{}'); } catch {}
+    t('shell: settings persist to storage',
+      stored.density === 'compact' && stored.autosave === !before.autosave && stored.defaultKind === 'sheet',
+      JSON.stringify(stored));
+    t('shell: density applies to the window', document.documentElement.dataset.density === 'compact');
+    const reread = T.settings.reload();
+    t('shell: settings survive a reload', reread.density === 'compact' && reread.defaultKind === 'sheet');
+    key('Escape');
+    await wait(40);
+    t('shell: settings closes on Escape', !modalOpen());
+    const tabsBefore = T.state.tabs.length;
+    key('n', { ctrlKey: true });
+    await wait(400);
+    t('shell: Ctrl+N creates the default file type', T.state.tabs.length === tabsBefore + 1 && T.state.doc && T.state.doc.kind === 'sheet',
+      T.state.doc ? T.state.doc.kind : 'no doc');
+    try { localStorage.setItem(T.settings.key, JSON.stringify({ density: 'huge', autosaveSec: 7, defaultKind: 'nope', spellcheck: 'yes' })); } catch {}
+    const fallback = T.settings.reload();
+    t('shell: bad stored settings fall back to defaults',
+      fallback.density === 'comfortable' && fallback.autosaveSec === 60 && fallback.defaultKind === 'doc' && fallback.spellcheck === true,
+      JSON.stringify(fallback));
+    T.settings.update(before);
+    T.applyTheme('light', true);
+
+    /* spellcheck switch reaches the editors and comes back */
+    await T.newDoc('doc');
+    await wait(150);
+    T.settings.update({ spellcheck: false });
+    const body = pane() && pane().querySelector('[contenteditable="true"]');
+    t('shell: spellcheck off reaches the document', !!body && body.spellcheck === false);
+    T.settings.update({ spellcheck: true });
+    t('shell: spellcheck on restores the editor setting', !!body && body.spellcheck === true);
+
+    /* app shortcuts stay out of the way while a dialog is up */
+    const tabsNow = T.state.tabs.length;
+    const guard = T.openModal('Guard', document.createElement('div'), [{ label: 'Close', value: null }]);
+    await wait(30);
+    key('w', { ctrlKey: true });
+    await wait(60);
+    t('shell: Ctrl+W does not close a tab behind a dialog', T.state.tabs.length === tabsNow && modalOpen());
+    T.closeModal(null);
+    await guard;
+
+    /* status bar save state */
+    const saveEl = () => pane() && pane().querySelector('.status-save');
+    t('shell: status bar shows a new document as not saved', !!saveEl() && /not saved/i.test(saveEl().textContent),
+      saveEl() ? saveEl().textContent : 'none');
+    T.markTabDirty(T.findTab(T.state.activeTabId));
+    t('shell: status bar shows unsaved changes', !!saveEl() && saveEl().dataset.state === 'dirty');
+    T.state.dirty = false;
+    T.findTab(T.state.activeTabId).dirty = false;
+
+    /* templates open real content in the right editor */
+    T.resetSession();
+    const expect = {
+      letter: (d) => /Dear Recipient Name/.test(d.html || ''),
+      resume: (d) => /Experience/.test(d.html || '') && /Education/.test(d.html || ''),
+      meeting: (d) => /Action items/.test(d.html || '') && /<table/i.test(d.html || ''),
+      budget: (d) => {
+        const rows = (d.sheets && d.sheets[0] && d.sheets[0].rows) || [];
+        return rows.some((r) => r[0] === 'Total' && /^=SUM\(/.test(r[1] || ''));
+      },
+      todo: (d) => /- \[ \]/.test(d.markdown || '') && /^# To-do list/.test(d.markdown || '')
+    };
+    for (const tpl of T.templates()) {
+      await T.newFromTemplate(tpl.id);
+      await wait(250);
+      let data = null;
+      try { data = await Promise.resolve(T.getEditor().getData()); } catch {}
+      const ok = !!data && T.state.doc && T.state.doc.kind === tpl.kind && !T.state.doc.path
+        && (!expect[tpl.id] || expect[tpl.id](data));
+      t(`shell: template "${tpl.label}" opens in the ${tpl.kind} editor with content`, ok,
+        T.state.doc ? `${T.state.doc.kind} ${T.state.doc.name}` : 'no doc');
+      if (tpl.id === 'budget') {
+        const ed = T.getEditor();
+        const total = ed && ed._test && ed._test.getFormatted ? String(ed._test.getFormatted(12, 1)) : '';
+        t('shell: budget template formulas calculate', /2,?840/.test(total), total);
+      }
+    }
+    t('shell: templates open as clean, unsaved documents', T.state.tabs.every((x) => !x.dirty && !x.doc.path));
+    t('shell: home lists templates', document.querySelectorAll('.home-template').length === T.templates().length);
+
+    /* pinned files */
+    T.resetSession();
+    if (!T.isPinned(cfg.welcomePath)) T.togglePin(cfg.welcomePath, 'welcome.md');
+    await T.loadRecents();
+    t('shell: pinned file shows in the library', !!document.querySelector('#home-pinned .home-tile')
+      && !document.getElementById('side-pinned-section').classList.contains('hidden'));
+    T.togglePin(cfg.welcomePath, 'welcome.md');
+    t('shell: unpinning removes it', !document.querySelector('#home-pinned .home-tile'));
+
+    /* Export as PDF asks for page setup for a note (not for a Word file) */
+    T.resetSession();
+    await T.newDoc('md');
+    const exporting = T.exportPdf();
+    await wait(60);
+    const pageOpts = document.querySelectorAll('#modal-body .pdf-page-options .settings-row').length;
+    t('shell: PDF export asks for paper, orientation and margins', modalOpen() && pageOpts === 3, `rows=${pageOpts}`);
+    const cancelBtn = [...document.querySelectorAll('#modal-actions .btn')].find((b) => b.textContent === 'Cancel');
+    if (cancelBtn) cancelBtn.click();
+    t('shell: cancelling page setup cancels the export', (await exporting) === false);
+    T.state.dirty = false;
+
+    /* reopen last session */
+    T.resetSession();
+    await T.openFromPath(cfg.welcomePath);
+    await T.openFromPath(cfg.docxPath);
+    T.state.dirty = false;
+    T.persistSession();
+    T.resetSession();
+    const reopened = await T.restoreSession();
+    t('shell: last session reopens its tabs',
+      reopened && T.state.tabs.length === 2 && T.state.doc && T.state.doc.kind === 'doc',
+      `reopened=${reopened} tabs=${T.state.tabs.length} front=${T.state.doc && T.state.doc.name}`);
+    T.state.tabs.forEach((x) => { x.dirty = false; });
+    T.state.dirty = false;
+
+    /* reopen a closed tab */
+    await T.closeTab(T.state.activeTabId);
+    key('T', { ctrlKey: true, shiftKey: true });
+    await wait(400);
+    t('shell: Ctrl+Shift+T reopens the closed tab', T.state.tabs.length === 2 && T.state.doc && T.state.doc.kind === 'doc',
+      `tabs=${T.state.tabs.length}`);
+    T.state.tabs.forEach((x) => { x.dirty = false; });
+    T.state.dirty = false;
+    T.resetSession();
+
+    /* autosave writes a dirty document that has a file */
+    const autoPath = joinTmp('autosave-shell.md');
+    await T.newDoc('md');
+    const r0 = await T.saveTo(autoPath);
+    T.resetSession();
+    if (r0 && r0.ok) {
+      await T.openFromPath(autoPath);
+      await wait(150);
+      const ta = pane() && pane().querySelector('.md-input');
+      if (ta) {
+        ta.value = '# Autosaved\n\nWritten in the background.';
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      await wait(60);
+      const was = T.settings.get().autosave;
+      T.settings.update({ autosave: true });
+      const n = await T.runAutosave();
+      T.settings.update({ autosave: was });
+      const back = await window.margo.openPath(autoPath);
+      t('shell: autosave saves a dirty file in the background',
+        n === 1 && !T.state.dirty && back.ok && /Autosaved/.test(back.doc.markdown || ''),
+        `saved=${n} dirty=${T.state.dirty}`);
+      const saveState = pane() && pane().querySelector('.status-save');
+      t('shell: status bar reports the autosave', !!saveState && /autosaved/i.test(saveState.textContent),
+        saveState ? saveState.textContent : 'none');
+    } else {
+      t('shell: autosave saves a dirty file in the background', false, 'could not create the test file');
+    }
+    T.resetSession();
+  }
+
+  /* ---------------- presentations ---------------- */
+  async function slidesSuite(T, cfg, joinTmp) {
+    const pane = () => document.querySelector('.tab-pane:not([hidden])');
+    const q = (sel) => { const p = pane(); return p ? p.querySelector(sel) : null; };
+    const key = (k, opts) => document.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, opts || {})));
+    T.resetSession();
+    await wait(100);
+    t('slides: editor registered', !!(window.MargoEditors && window.MargoEditors.slides && window.MargoSlidesCore));
+    await T.newDoc('slides');
+    await wait(250);
+    const ed = T.getEditor();
+    const C = ed && ed.commands;
+    t('slides: new deck opens', T.state.doc && T.state.doc.kind === 'slides' && !!q('.sl-stage .ms-slide'),
+      T.state.doc && T.state.doc.kind);
+    t('slides: status reads Slide 1 of 1', C && C.status() === 'Slide 1 of 1', C && C.status());
+    t('slides: rail shows one thumbnail', !!q('.sl-rail') && q('.sl-rail').querySelectorAll('.sl-thumb').length === 1);
+    t('slides: toolbar has Present and New slide', !!q('.sl-present') || !!document.querySelector('.tab-pane:not([hidden]) .sl-present'),
+      '');
+
+    // type into the title placeholder
+    const d0 = C.deck();
+    const titleId = d0.slides[0].elements.find((e) => e.role === 'title').id;
+    C.startEdit(titleId);
+    await wait(40);
+    document.execCommand('insertText', false, 'Smoke deck title');
+    C.endEdit();
+    await wait(40);
+    t('slides: typing into the title updates the deck',
+      window.MargoSlidesCore.elementText(C.deck().slides[0].elements.find((e) => e.id === titleId)) === 'Smoke deck title');
+    t('slides: editing marks the tab dirty', T.state.dirty === true);
+    await T.flushDrafts();
+    const drafts = await window.margo.drafts.list();
+    const draft = drafts.find((d) => d.kind === 'slides');
+    t('slides: unsaved deck is kept as a crash-recovery draft',
+      !!draft && draft.data && draft.data.deck && draft.data.deck.slides.length === 1
+        && JSON.stringify(draft.data.deck).includes('Smoke deck title'), drafts.map((d) => d.kind).join(','));
+
+    // add a slide from the toolbar
+    const addBtn = document.querySelector('.tab-pane:not([hidden]) .sl-split-main');
+    if (addBtn) addBtn.click();
+    await wait(80);
+    t('slides: New slide adds a slide', C.slideCount() === 2 && C.status() === 'Slide 2 of 2', C.status());
+    t('slides: rail follows', q('.sl-rail').querySelectorAll('.sl-thumb').length === 2);
+
+    // text box
+    C.addTextBox();
+    await wait(60);
+    t('slides: new text box starts in edit mode', !!C.editingId());
+    document.execCommand('insertText', false, 'Smoke text box');
+    C.endEdit();
+    const box = C.deck().slides[1].elements[C.deck().slides[1].elements.length - 1];
+    t('slides: text box holds its text', box.type === 'text' && window.MargoSlidesCore.elementText(box) === 'Smoke text box');
+    C.select([box.id]);
+    C.bold();
+    t('slides: bold applies to a selected box', box.paragraphs[0].runs.every((r) => r.b === true));
+    C.fontSize(36);
+    t('slides: font size applies to a selected box', box.size === 36);
+
+    // shape + keyboard nudge + undo/redo
+    C.addShape('ellipse');
+    await wait(40);
+    const shape = C.deck().slides[1].elements.find((e) => e.type === 'shape' && e.shape === 'ellipse');
+    const x0 = shape && shape.x;
+    const vp = q('.sl-viewport');
+    if (vp) vp.focus();
+    key('ArrowRight');
+    key('ArrowRight', { shiftKey: true });
+    const moved = C.deck().slides[1].elements.find((e) => e.id === shape.id);
+    t('slides: arrow keys nudge the selection', moved && moved.x === x0 + 11, `${x0} -> ${moved && moved.x}`);
+    // Consecutive nudges are one undo step, as in PowerPoint.
+    C.undo();
+    const back = C.deck().slides[1].elements.find((e) => e.id === shape.id);
+    t('slides: undo restores the position', back && back.x === x0, back ? back.x : 'shape gone');
+    C.redo();
+    t('slides: redo re-applies it', C.deck().slides[1].elements.find((e) => e.id === shape.id).x === x0 + 11);
+    key('d', { ctrlKey: true });
+    t('slides: Ctrl+D duplicates the selection', C.deck().slides[1].elements.filter((e) => e.type === 'shape' && e.shape === 'ellipse').length === 2);
+    key('Delete');
+    t('slides: Delete removes the selection', C.deck().slides[1].elements.filter((e) => e.type === 'shape' && e.shape === 'ellipse').length === 1);
+
+    // image
+    const cv = document.createElement('canvas');
+    cv.width = 64; cv.height = 32;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#3a7'; g.fillRect(0, 0, 64, 32);
+    await C.addImage(cv.toDataURL('image/png'));
+    const img = C.deck().slides[1].elements.find((e) => e.type === 'image');
+    t('slides: picture inserts with its proportions', !!img && img.nw === 64 && Math.abs(img.w / img.h - 2) < 0.05, img && `${img.w}x${img.h}`);
+
+    // notes + theme
+    const notes = q('.sl-notes-input');
+    if (notes) { notes.value = 'Smoke speaker notes'; notes.dispatchEvent(new Event('input', { bubbles: true })); }
+    t('slides: speaker notes are kept per slide', C.deck().slides[1].notes === 'Smoke speaker notes');
+    C.setTheme('editorial');
+    t('slides: theme switches the deck', C.deck().theme === 'editorial' && C.themes().length >= 4);
+
+    // slide management
+    C.duplicateSlide();
+    t('slides: duplicate slide', C.slideCount() === 3 && C.currentIndex() === 2);
+    C.moveSlide(2, 0);
+    t('slides: move slide', C.currentIndex() === 0 && C.deck().slides[0].notes === 'Smoke speaker notes');
+    C.deleteSlide();
+    t('slides: delete slide', C.slideCount() === 2);
+    C.goTo(0);
+
+    await shot('slides-light.png');
+    T.applyTheme('dark', false);
+    await wait(80);
+    await shot('slides-dark.png');
+    T.applyTheme('light', false);
+
+    // slideshow
+    C.present(0);
+    await wait(120);
+    const showEl = document.querySelector('.sl-show');
+    t('slides: slideshow opens full screen', !!showEl && C.isPresenting());
+    const count = () => (document.querySelector('.sl-show-count') || {}).textContent;
+    t('slides: slideshow counter', count() === '1 / 2', count());
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    await wait(80);
+    t('slides: arrow advances the show', count() === '2 / 2', count());
+    await shot('slides-show.png');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await wait(80);
+    t('slides: Esc ends the show', !document.querySelector('.sl-show') && !C.isPresenting());
+
+    // library thumbnail
+    const thumb = await window.MargoSlides.thumbDataUrl(C.deck());
+    t('slides: library thumbnail renders', typeof thumb === 'string' && thumb.startsWith('data:image/png'), thumb ? thumb.slice(0, 30) : 'null');
+
+    // save, export, reopen
+    const deckPath = joinTmp('ui-deck.pptx');
+    const res = await T.saveTo(deckPath);
+    t('slides: save as .pptx', res && res.ok, res && res.error);
+    t('slides: saving clears dirty', T.state.dirty === false);
+    t('slides: export as PDF', await T.exportTo(joinTmp('export-slides.pdf')));
+    const slidesBefore = C.slideCount();
+    await wait(400);
+    T.showLanding();
+    let tile = null;
+    for (let i = 0; i < 30; i++) {
+      tile = [...document.querySelectorAll('.home-tile')].find((el) => /ui-deck\.pptx$/.test(el.dataset.path || ''));
+      if (tile && tile.querySelector('img') && !tile.querySelector('.home-tile-cover-type')) break;
+      await wait(150);
+    }
+    t('slides: library tile shows the deck', !!tile, tile ? '' : 'no tile for ui-deck.pptx');
+    await shot('slides-home.png');
+    await T.openFromPath(deckPath);
+    await wait(250);
+    const ed2 = T.getEditor();
+    const d2 = ed2 && ed2.commands && ed2.commands.deck();
+    const all = d2 ? d2.slides.map((sl) => sl.elements.map(window.MargoSlidesCore.elementText).join(' ')).join(' | ') : '';
+    t('slides: reopened deck round-trips', T.state.doc && T.state.doc.kind === 'slides' && d2 && d2.slides.length === slidesBefore
+      && all.includes('Smoke deck title') && all.includes('Smoke text box') && d2.theme === 'editorial'
+      && d2.slides.some((sl) => sl.notes === 'Smoke speaker notes') && d2.slides.some((sl) => sl.elements.some((e) => e.type === 'image' && e.src)),
+      all.slice(0, 160));
+    T.state.dirty = false;
+    await T.closeTab(T.state.activeTabId);
+  }
+
   window.margo.onSmokeRun(async (cfg) => {
     const T = window.__margoTest;
-    const joinTmp = (f) => cfg.tmpDir + '\\' + f;
+    // The main process says which separator its platform uses; a hard-coded
+    // backslash wrote every artifact beside /tmp/margo-smoke on Linux/macOS.
+    const joinTmp = (f) => cfg.tmpDir + (cfg.sep || '/') + f;
+    if (cfg.only === 'slides') {
+      try { await slidesSuite(T, cfg, joinTmp); } catch (err) { t('slides suite crashed', false, err.stack || err.message); }
+      window.margo.smoke.report(results);
+      return;
+    }
     try {
       // 1. landing renders (start from a known state)
       T.showLanding();
@@ -95,6 +515,70 @@
         const edMd = T.getEditor();
         t('md outline command exists', !!(edMd && edMd.commands && typeof edMd.commands.outline === 'function'));
         t('md stats command exists', !!(edMd && edMd.commands && typeof edMd.commands.stats === 'function'));
+      }
+      /* markdown editor features: status line, toolbar, typing helpers,
+         preview (highlighting, tasks, footnotes, sanitising), scroll sync */
+      {
+        const edMd = T.getEditor();
+        const MT = edMd && edMd._test;
+        if (MT) {
+          const mta = MT.textarea();
+          const original = mta.value;
+          t('md status reports words and reading time',
+            /^[\d,]+ words? · \d+ min read$/.test(edMd.commands.status()), edMd.commands.status());
+          const mdTools = document.querySelectorAll('.tab-pane:not([hidden]) .md-toolbar .md-tb-btn svg');
+          t('md toolbar has icon buttons', mdTools.length >= 16, `${mdTools.length} icon buttons`);
+          t('md code block highlighted in preview', !!MT.preview().querySelector('pre code .tok-keyword'));
+          MT.setText('- item');
+          MT.key({ key: 'Enter' });
+          t('md Enter continues a list', mta.value === '- item\n- ', JSON.stringify(mta.value));
+          MT.key({ key: 'Enter' });
+          t('md Enter on an empty item ends the list', mta.value === '- item\n', JSON.stringify(mta.value));
+          MT.setText('1. a\n2. b', 4);
+          MT.key({ key: 'Enter' });
+          t('md numbered list continues and renumbers', mta.value === '1. a\n2. \n3. b', JSON.stringify(mta.value));
+          MT.setText('- a\n- b', 7);
+          MT.key({ key: 'Tab' });
+          t('md Tab indents a list item', mta.value === '- a\n  - b', JSON.stringify(mta.value));
+          MT.setText('');
+          MT.key({ key: '(' });
+          t('md auto-pairs brackets', mta.value === '()' && mta.selectionStart === 1, JSON.stringify(mta.value));
+          MT.setText('hello world', 2);
+          MT.key({ key: 'b', ctrlKey: true });
+          t('md Ctrl+B bolds the word', mta.value === '**hello** world', JSON.stringify(mta.value));
+          MT.key({ key: 'b', ctrlKey: true });
+          t('md Ctrl+B toggles bold off', mta.value === 'hello world', JSON.stringify(mta.value));
+          MT.setText('Title', 1);
+          MT.key({ key: '2', code: 'Digit2', ctrlKey: true });
+          t('md Ctrl+2 makes a heading', mta.value === '## Title', JSON.stringify(mta.value));
+          edMd.commands.undo();
+          t('md undo reverts a toolbar edit', mta.value === 'Title', JSON.stringify(mta.value));
+          MT.setText('- [ ] one\n- [x] two\n\nSee[^1].\n\n[^1]: A note.\n\n<style>body{display:none}</style>\n\n<img src=x onerror="window.__mdPwned=1">');
+          MT.render();
+          const boxes = MT.preview().querySelectorAll('input.md-task');
+          t('md task list renders checkboxes', boxes.length === 2, `${boxes.length}`);
+          if (boxes[0]) boxes[0].click();
+          t('md ticking a preview checkbox edits the source', mta.value.startsWith('- [x] one'), mta.value.slice(0, 20));
+          t('md footnotes render', MT.preview().querySelectorAll('.md-footnotes li').length === 1);
+          t('md preview strips style tags', !MT.preview().querySelector('style'));
+          await wait(60);
+          t('md preview blocks inline handlers', !window.__mdPwned);
+          let big = '';
+          for (let i = 0; i < 80; i++) big += `## Part ${i}\n\nSome text for part ${i} that is long enough to wrap once or twice in the editor pane.\n\n`;
+          MT.setText(big, 0);
+          MT.render();
+          t('md scroll sync maps blocks', MT.syncPoints() >= 80, `${MT.syncPoints()} points`);
+          edMd.commands.setMdMode('split');
+          const pane = MT.previewPane();
+          const target = [...MT.preview().querySelectorAll('h2')].find((h) => h.textContent === 'Part 60');
+          const y = MT.offsetY(mta.value.indexOf('## Part 60'));
+          mta.scrollTop = y;
+          MT.scrollEditorTo(y);
+          const drift = target ? Math.abs(target.getBoundingClientRect().top - pane.getBoundingClientRect().top) : 999;
+          t('md scroll sync lines the preview up with the editor', drift < 40, `${Math.round(drift)}px`);
+          MT.setText(original, 0);
+          MT.render();
+        }
       }
       const ta = document.querySelector('.tab-pane:not([hidden]) .md-input') || document.querySelector('.md-input');
       {
@@ -265,9 +749,10 @@
         t('doc comment button sits in the Insert tab as well',
           railBtns.filter((b) => b.title === 'Add comment').length >= 2,
           String(railBtns.filter((b) => b.title === 'Add comment').length));
+        // "Footnote" is its own feature; the check is for the old "note" label.
         t('doc has no Add note label left',
-          !railBtns.some((b) => /note/i.test(b.title || '')),
-          railBtns.map((b) => b.title).filter((x) => /note/i.test(x || '')).join(','));
+          !railBtns.some((b) => /\bnotes?\b/i.test(b.title || '')),
+          railBtns.map((b) => b.title).filter((x) => /\bnotes?\b/i.test(x || '')).join(','));
         /* The browser rewrites SVG markup on parse, so both sides are put
            through it before being compared. */
         const asParsed = (svg) => { const d = document.createElement('div'); d.innerHTML = svg || ''; return d.innerHTML; };
@@ -727,6 +1212,237 @@
           !!symChar && symBody.textContent !== textBefore && symBody.textContent.indexOf(symChar) >= 0,
           `${symChar} :: ${symBody.textContent.slice(-24)}`);
       }
+      /* Word processor features, in a fresh document of their own so the
+         sample document's later save and export checks see it unchanged. */
+      {
+        const prevTabId = T.state.activeTabId;
+        await T.newDoc('doc');
+        await wait(250);
+        const fed = T.getEditor();
+        const F = fed && fed._test;
+        const fpane = document.querySelector('.tab-pane:not([hidden])');
+        let fb = fpane && fpane.querySelector('.doc-page-body');
+        const selNode = (node, a, b) => {
+          const rr = document.createRange();
+          if (b === undefined) rr.selectNodeContents(node); else { rr.setStart(node, a); rr.setEnd(node, b); }
+          const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr);
+        };
+        const caretAt = (node, off) => {
+          const rr = document.createRange(); rr.setStart(node, off || 0); rr.collapse(true);
+          const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr);
+        };
+        if (F && fb) {
+          const tabs = [...fpane.querySelectorAll('.doc-ribbon-tab')];
+          t('doc feature: ribbon has Home, Insert, Layout, References, Review, View',
+            ['Home', 'Insert', 'Layout', 'References', 'Review', 'View'].every((n) => tabs.some((b) => b.textContent === n && !b.classList.contains('hidden'))),
+            tabs.map((b) => b.textContent).join(','));
+          t('doc feature: ribbon buttons are drawn icons, not letters',
+            [...fpane.querySelectorAll('.doc-ribbon .icon-btn')].every((b) => !!b.querySelector('svg')));
+          t('doc feature: Table tab hidden outside a table',
+            !!fpane.querySelector('.doc-ribbon-tab.is-contextual.hidden'));
+
+          // paragraph styles
+          fb.innerHTML = '<p>Heading here</p><p>Body one</p><p>Body two</p>';
+          selNode(fb.children[0]);
+          F.applyStyle('title');
+          t('doc feature: Title style', !!fb.querySelector('p.margo-title'), fb.innerHTML.slice(0, 120));
+          selNode(fb.children[0]);
+          F.applyStyle('h2');
+          t('doc feature: Heading 2 style replaces Title', !!fb.querySelector('h2') && !fb.querySelector('.margo-title'), fb.innerHTML.slice(0, 120));
+          selNode(fb.children[1]);
+          F.applyStyle('quote');
+          t('doc feature: Quote style', !!fb.querySelector('blockquote'), fb.innerHTML.slice(0, 160));
+          selNode(fb.querySelector('blockquote'));
+          F.applyStyle('p');
+          t('doc feature: back to Normal', !fb.querySelector('blockquote'), fb.innerHTML.slice(0, 160));
+
+          // spacing, indent
+          fb.innerHTML = '<p>one</p><p>two</p><p>three</p>';
+          { const rr = document.createRange(); rr.setStart(fb.children[0].firstChild, 1); rr.setEnd(fb.children[2].firstChild, 2); const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr); }
+          F.lineSpacing('1.5');
+          F.paraSpacing('before', 6);
+          t('doc feature: line and paragraph spacing reach every selected paragraph',
+            [...fb.children].every((p) => p.style.lineHeight === '1.5' && p.style.marginTop === '6pt'), fb.innerHTML.slice(0, 200));
+          selNode(fb.children[1]);
+          F.indent(1);
+          t('doc feature: indent moves the paragraph, not into a quote',
+            fb.children[1].style.marginLeft === '36pt' && !fb.querySelector('blockquote'), fb.innerHTML.slice(0, 200));
+
+          // checklist
+          fb.innerHTML = '<p>task</p>';
+          selNode(fb.firstChild);
+          F.toggleList('check');
+          const cli = fb.querySelector('ul.margo-checklist > li');
+          t('doc feature: checklist', !!cli, fb.innerHTML);
+          if (cli) {
+            const rc = cli.getBoundingClientRect();
+            cli.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rc.left - 8, clientY: rc.top + 5, button: 0 }));
+            t('doc feature: clicking the box ticks the item', cli.classList.contains('is-checked'), cli.outerHTML);
+          }
+
+          // highlight and case keep other formatting
+          fb.innerHTML = '<p>hello brave <b>new</b> world</p>';
+          selNode(fb.firstChild.firstChild, 6, 11);
+          F.highlight('#ffff00');
+          t('doc feature: partial highlight', !!fb.querySelector('mark.hl-yellow') && fb.querySelector('mark').textContent === 'brave', fb.innerHTML);
+          selNode(fb.firstChild);
+          F.changeCase('upper');
+          t('doc feature: change case keeps bold and highlight', fb.textContent === 'HELLO BRAVE NEW WORLD' && !!fb.querySelector('b') && !!fb.querySelector('mark'), fb.innerHTML);
+
+          // tables
+          fb.innerHTML = '<p>above</p><p>below</p>';
+          caretAt(fb.children[0].firstChild, 5);
+          F.insertTable(2, 2);
+          const tbl = fb.querySelector('table');
+          t('doc feature: insert 2x2 table', !!tbl && tbl.querySelectorAll('td').length === 4);
+          if (tbl) {
+            t('doc feature: Table tab appears in a table', await (async () => { await wait(40); fed.focus(); return !fpane.querySelector('.doc-ribbon-tab.is-contextual').classList.contains('hidden'); })());
+            caretAt(tbl.querySelector('td'), 0);
+            F.insertRow('below'); F.insertCol('right');
+            t('doc feature: add row and column', tbl.querySelectorAll('tr').length === 3 && tbl.querySelector('tr').children.length === 3, tbl.outerHTML.slice(0, 200));
+            { const tds = tbl.querySelectorAll('tr')[0].children; tds[0].textContent = 'A'; tds[1].textContent = 'B'; const rr = document.createRange(); rr.setStart(tds[0].firstChild, 0); rr.setEnd(tds[1].firstChild, 1); const ss = window.getSelection(); ss.removeAllRanges(); ss.addRange(rr); }
+            F.mergeCells();
+            t('doc feature: merge cells', !!tbl.querySelector('td[colspan="2"]'), tbl.outerHTML.slice(0, 200));
+            caretAt(tbl.querySelector('td[colspan="2"]'), 0);
+            F.splitCell();
+            t('doc feature: split merged cell', !tbl.querySelector('tr').querySelector('[colspan]') && tbl.querySelector('tr').children.length === 3);
+            caretAt(tbl.querySelector('td'), 0);
+            F.headerRow();
+            F.borders('outer');
+            t('doc feature: header row and outside borders', !!tbl.querySelector('thead th') && tbl.classList.contains('margo-tbl-outer'), tbl.outerHTML.slice(0, 200));
+            caretAt(tbl.querySelector('tbody td'), 0);
+            F.deleteRow(); F.deleteCol();
+            t('doc feature: delete row and column', tbl.querySelectorAll('tr').length === 2 && tbl.querySelector('tr').children.length === 2, tbl.outerHTML.slice(0, 200));
+          }
+
+          // page break at the caret, and Backspace takes it out again
+          fb.innerHTML = '<p>First page</p><p>Second page</p>';
+          const pagesBefore = F.pageCount();
+          caretAt(fb.children[1].firstChild, 0);
+          F.pageBreak();
+          const pg = fpane.querySelectorAll('.doc-page');
+          t('doc feature: page break splits at the caret',
+            F.pageCount() === pagesBefore + 1 && pg[1] && /Second page/.test(pg[1].textContent) && !/Second page/.test(pg[0].querySelector('.doc-page-body').textContent),
+            `${pagesBefore} -> ${F.pageCount()}`);
+          const b2 = pg[1] && pg[1].querySelector('.doc-page-body');
+          if (b2) {
+            b2.focus();
+            caretAt(b2.querySelector('p').firstChild, 0);
+            b2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+            t('doc feature: Backspace at the top of a page removes the break',
+              F.pageCount() === pagesBefore && !/data-margo-page-break/.test(fed.getData().html), fed.getData().html.slice(0, 160));
+            F.undo();
+            await wait(30);
+            t('doc feature: undo brings the break back', /data-margo-page-break/.test(fed.getData().html));
+            const sel2 = window.getSelection();
+            t('doc feature: undo puts the caret back in the text',
+              !!(sel2.rangeCount && sel2.anchorNode && sel2.anchorNode.parentElement && sel2.anchorNode.parentElement.closest('.doc-page-body')));
+          }
+
+          // table of contents and footnotes
+          fb = fpane.querySelector('.doc-page-body');
+          fb.innerHTML = '<h1>Alpha</h1><p>x</p><h2>Beta</h2><p>y z</p>';
+          caretAt(fb.firstChild.firstChild, 0);
+          F.insertToc();
+          const toc = fpane.querySelector('.margo-toc');
+          t('doc feature: table of contents lists the headings with pages',
+            !!toc && toc.querySelectorAll('.margo-toc-entry').length === 2 && /Alpha/.test(toc.textContent) && !!toc.querySelector('.margo-toc-page'),
+            toc ? toc.outerHTML.slice(0, 200) : 'none');
+          const lastP = [...fb.querySelectorAll('p')].pop();
+          caretAt(lastP.firstChild, 1);
+          F.insertFootnote();
+          await wait(40);
+          t('doc feature: footnote reference and note',
+            !!fpane.querySelector('sup.margo-fn-ref') && !!fpane.querySelector('.margo-footnotes li'));
+
+          // find options and replace all
+          fb = fpane.querySelector('.doc-page-body');
+          fb.innerHTML = '<p>Cat cat catalog <b>ca</b>t</p>';
+          F.setFindOption('wholeWord', true);
+          F.runFind('cat');
+          t('doc feature: find whole word across formatting', F.findHits() === 3, String(F.findHits()));
+          F.setFindOption('matchCase', true);
+          F.runFind('cat');
+          t('doc feature: find match case', F.findHits() === 2, String(F.findHits()));
+          F.setFindOption('matchCase', false); F.setFindOption('wholeWord', false); F.setFindOption('regex', true);
+          F.runFind('cat\\w+');
+          t('doc feature: find regular expression', F.findHits() === 1, String(F.findHits()));
+          F.setFindOption('regex', false);
+          fed.commands.find();
+          await wait(40);
+          const fbar = fpane.querySelector('.doc-find-bar');
+          fbar.querySelector('.doc-find-input').value = 'cat';
+          fbar.querySelector('.doc-find-input').dispatchEvent(new Event('input', { bubbles: true }));
+          fbar.querySelector('.doc-replace-input').value = 'dog';
+          F.replaceAll();
+          t('doc feature: replace all', !/cat/i.test(fb.textContent.replace(/catalog/i, '')) && /dog/.test(fb.textContent), fb.textContent);
+          fbar.querySelector('.doc-find-close').click();
+
+          // paste clean-up
+          const cleaned = F.cleanPaste('<p class=MsoNormal style="mso-fareast-font-family:Calibri;color:black"><b>Bold</b><o:p></o:p></p><p style="mso-list:l0 level1 lfo1"><span style="mso-list:Ignore">·<span> </span></span>Item</p>');
+          t('doc feature: paste from Word is cleaned', !/mso|Mso|o:p/.test(cleaned) && /<ul><li>Item<\/li><\/ul>/.test(cleaned) && /<b>Bold<\/b>/.test(cleaned), cleaned);
+
+          // format painter
+          fb.innerHTML = '<p><b><i>src</i></b> target</p>';
+          caretAt(fb.querySelector('i').firstChild, 1);
+          const fmt = F.captureFormat();
+          { const tn = fb.firstChild.lastChild; selNode(tn, 1, 7); }
+          F.applyFormat(fmt);
+          t('doc feature: format painter copies bold and italic', fb.querySelectorAll('b, strong').length >= 2 && fb.querySelectorAll('i, em').length >= 2, fb.innerHTML);
+
+          // pictures
+          fb.innerHTML = '<p>pic </p>';
+          caretAt(fb.firstChild.firstChild, 4);
+          F.paste('<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="dot" style="width:40px;height:30px">');
+          const im = fb.querySelector('img');
+          t('doc feature: picture pasted', !!im);
+          if (im) {
+            F.selectImage(im);
+            const ov = F.imageOverlay();
+            t('doc feature: picture tools appear', !!(ov && ov.querySelector('.doc-img-handle.h-se') && ov.querySelector('.doc-img-bar')));
+            ov.querySelector('[data-img-align="center"]').click();
+            t('doc feature: picture centred', im.closest('p').style.textAlign === 'center');
+            t('doc feature: picture tools never reach the file', !/doc-img|is-selected/.test(fed.getData().html));
+          }
+
+          // header, footer, page numbers, status
+          F.setLayout({ headerText: 'Report', footerText: 'Confidential', showPageNumbers: true });
+          t('doc feature: header and footer drawn in the margins',
+            /Report/.test(fpane.querySelector('.doc-page-header').textContent) && /Page 1 of/.test(fpane.querySelector('.doc-page-footer').textContent));
+          t('doc feature: status line', /^[\d,]+ words? · [\d,]+ characters? · Page \d+ of \d+$/.test(fed.commands.status()), fed.commands.status());
+          F.setSpellcheck(false);
+          t('doc feature: spell check can be turned off', [...fpane.querySelectorAll('.doc-page-body')].every((b) => b.spellcheck === false));
+          F.setSpellcheck(true);
+
+          // and everything above survives Save as .docx and reopening
+          fb.innerHTML = '<p class="margo-title">Saved</p><ul class="margo-checklist"><li class="is-checked">Done</li></ul>' +
+            '<table style="width:100%"><thead><tr><th>H</th></tr></thead><tbody><tr><td>c</td></tr></tbody></table>' +
+            '<p>ref</p>';
+          caretAt(fb.lastChild.firstChild, 3);
+          F.insertFootnote();
+          await wait(40);
+          const rs = await T.saveTo(joinTmp('ui-features.docx'));
+          t('doc feature: save as docx', rs && rs.ok, rs && rs.error);
+          if (rs && rs.ok) {
+            T.state.dirty = false;
+            await T.closeTab(T.state.activeTabId);
+            await T.openFromPath(joinTmp('ui-features.docx'));
+            await wait(300);
+            const rp = document.querySelector('.tab-pane:not([hidden])');
+            const html2 = rp ? rp.querySelector('.doc-pages').innerHTML : '';
+            t('doc feature: docx reopen keeps title, checklist, header row, footnote',
+              /margo-title/.test(html2) && /margo-checklist[\s\S]*is-checked/.test(html2) && /<th/.test(html2) && /margo-fn-ref/.test(html2),
+              html2.slice(0, 300));
+            const lay = T.getEditor()._test.layout();
+            t('doc feature: docx reopen keeps header, footer and page numbers',
+              lay.headerText === 'Report' && lay.footerText === 'Confidential' && lay.showPageNumbers === true, JSON.stringify(lay));
+          }
+        }
+        T.state.dirty = false;
+        if (T.state.activeTabId && T.state.activeTabId !== prevTabId) await T.closeTab(T.state.activeTabId);
+        if (prevTabId && T.activateTab) await T.activateTab(prevTabId);
+        await wait(60);
+      }
       // themed save modal (Don't Save)
       T.state.dirty = true;
       const dirtyPromise = T.resolveDirty();
@@ -914,6 +1630,80 @@
       }
       ed._test.select(0, 0);
 
+      /* ---- spreadsheet engine, editing and structure (rows 200+ so the
+         sample data above stays as the save tests expect) ---- */
+      {
+        const S = ed._test;
+        const fx = (f) => S.evalFormula(f, 300, 20);
+        const fnCases = [
+          ['=IFERROR(1/0,"none")', 'none'], ['=XLOOKUP(2,{1,2,3},{"a","b","c"})', 'b'],
+          ['=TEXTJOIN("-",TRUE,"a","","b")', 'a-b'], ['=SUBSTITUTE("a.b.c",".","/")', 'a/b/c'],
+          ['=PROPER("margo sheet")', 'Margo Sheet'], ['=TEXT(1234.5,"#,##0.00")', '1,234.50'],
+          ['=ROUNDUP(2.341,2)', 2.35], ['=MEDIAN(3,1,2,10)', 2.5], ['=YEAR(DATE(2026,3,1))', 2026],
+          ['=WEEKDAY(DATE(2026,9,27))', 1], ['=IFS(1>2,"x",TRUE,"y")', 'y'], ['=COUNTIF({1,5,9},">4")', 2],
+          ['=2^-1+10%', 0.6], ['="a"&1+1', 'a2'], ['=-2^2', 4], ['=NOPE(1)', '#NAME?'], ['=1/0', '#DIV/0!'],
+          ['="x"+1', '#VALUE!'], ['=SQRT(-1)', '#NUM!']
+        ];
+        const fnBad = fnCases.filter(([f, want]) => {
+          const got = fx(f);
+          return typeof want === 'number' ? Math.abs(got - want) > 1e-9 : got !== want;
+        }).map(([f, want]) => `${f} => ${fx(f)} (want ${want})`);
+        t('sheet function library and operators', fnBad.length === 0, fnBad.join(' | '));
+
+        S.setCell(200, 0, '10'); S.setCell(201, 0, '20'); S.setCell(202, 0, '=SUM(A201:A202)');
+        S.setCell(203, 0, '=A204'); S.setCell(204, 0, '=A204+1');
+        t('sheet circular reference is an error', S.getFormatted(203, 0) === '#CIRCULAR!' || S.getFormatted(204, 0) === '#CIRCULAR!', S.getFormatted(204, 0));
+        S.setCell(203, 0, ''); S.setCell(204, 0, '');
+
+        // inserting a row inside the summed block moves the formula and widens its range
+        S.select(201, 0); S.insertRows('above');
+        t('sheet insert row shifts references', S.getCell(203, 0) === '=SUM(A201:A203)' && S.getFormatted(203, 0) === '30', S.getCell(203, 0));
+        S.select(201, 0); S.deleteRows();
+        t('sheet delete row shrinks references', S.getCell(202, 0) === '=SUM(A201:A202)' && S.getFormatted(202, 0) === '30', S.getCell(202, 0));
+
+        // copy/paste moves relative references; $ stays put
+        S.setCell(200, 1, '=A201*$A$201');
+        S.selectRange(200, 1, 200, 1); S.copy(false); S.select(201, 1); S.pasteInternal(false);
+        t('sheet paste adjusts relative references', S.getCell(201, 1) === '=A202*$A$201' && S.getFormatted(201, 1) === '200', S.getCell(201, 1));
+
+        // fill handle series
+        S.setCell(210, 0, '1'); S.setCell(211, 0, '3'); S.setCell(210, 1, 'Mon'); S.setCell(210, 2, 'Q1');
+        S.fill('A211:A212', 'A211:A214'); S.fill('B211:C211', 'B211:C213');
+        const series = [S.getCell(213, 0), S.getCell(212, 1), S.getCell(212, 2)].join(',');
+        t('sheet fill continues series', series === '7,Wed,Q3', series);
+
+        // typing through the real cell editor, with autocomplete
+        t('sheet autocomplete lists functions', S.autocomplete('=VLO').includes('VLOOKUP'), S.autocomplete('=VLO').join(','));
+        S.typeInto(215, 0, '=a201+a202');
+        t('sheet typed formula is tidied', S.getCell(215, 0) === '=A201+A202' && S.getFormatted(215, 0) === '30', S.getCell(215, 0));
+
+        // number formats, merge, status, undo
+        S.setCell(216, 0, '1234.5'); S.select(216, 0); S.setNumFmt('"$"#,##0.00');
+        t('sheet currency format displays', S.getFormatted(216, 0) === '$1,234.50', S.getFormatted(216, 0));
+        S.setNumFmt('0.0%');
+        t('sheet percent format displays', S.getFormatted(216, 0) === '123450.0%', S.getFormatted(216, 0));
+        S.selectRange(200, 0, 201, 0);
+        t('sheet status shows sum/average/count', ed.commands.status() === 'Sum: 30 · Average: 15 · Count: 2', ed.commands.status());
+        S.selectRange(220, 0, 221, 1); S.merge();
+        t('sheet merge cells', !!S.mergeAt(221, 1) && S.mergeAt(221, 1).r1 === 220);
+        S.undo();
+        t('sheet undo unmerges', !S.mergeAt(221, 1));
+
+        // conditional formatting and validation
+        S.addCondFormat({ range: 'A201:A202', type: 'gt', v1: '15', style: { fill: '#c6efce' } });
+        t('sheet conditional format rule applies', !S.cellCss(200, 0) && S.cellCss(201, 0) && S.cellCss(201, 0).fill === '#c6efce');
+        S.addValidation({ range: 'D201:D205', type: 'list', values: ['Yes', 'No'], strict: true });
+        const rejected = S.typeInto(200, 3, 'Maybe') === false;
+        S.select(0, 0);
+        t('sheet list validation rejects other values', rejected && S.getCell(200, 3) === '');
+
+        // a big sheet renders only what is on screen
+        t('sheet grid is virtualised', S.renderedCells() > 50 && S.renderedCells() < 3000, `${S.renderedCells()} cells in the DOM`);
+
+        for (let r = 200; r <= 222; r++) for (let c = 0; c <= 3; c++) S.setCell(r, c, '');
+        S.select(0, 0);
+      }
+
       // Test cell sizing and text size
       ed._test.setColWidth(0, 150);
       t('sheet col width resized', ed._test.getColWidth(0) === 150);
@@ -965,6 +1755,52 @@
         for (let i = 0; i < 60 && !ped._test.firstPageRendered(); i++) await wait(150);
         t('pdf page recovers after a forced failure', ped._test.firstPageRendered(),
           ped._test.firstPageError());
+      }
+
+      /* pdf editor features: status, thumbnails, text layer, page
+         operations with undo, and annotations burned in the right place on
+         a rotated page. Every change is undone so the signature test below
+         starts from the untouched sample. */
+      if (ped._test.rotate) {
+        const PT = ped._test;
+        t('pdf status shows page and zoom', /^Page 1 of 2 · \d+%$/.test(ped.commands.status()), ped.commands.status());
+        t('pdf thumbnails list every page', PT.thumbsCount() === 2, `${PT.thumbsCount()} thumbs`);
+        for (let i = 0; i < 30 && !PT.textLayerSpans(0); i++) await wait(100);
+        t('pdf text layer renders for selection', PT.textLayerSpans(0) > 0, `${PT.textLayerSpans(0)} spans`);
+        ped.commands.goToPage(2);
+        await wait(120);
+        t('pdf go to page', PT.currentPage() === 2, `page ${PT.currentPage()}`);
+        ped.commands.goToPage(1);
+        await PT.rotate(1, 1);
+        t('pdf rotate page', JSON.stringify(PT.pageSizes()[1]) === '[792,612,90]', JSON.stringify(PT.pageSizes()[1]));
+        t('pdf page edit marks dirty', T.state.dirty === true);
+        PT.addAnn({ type: 'text', pageIndex: 1, xr: 0.1, yr: 0.2, wr: 0.5, hr: 0.05, text: 'SMOKE MARK', size: 18 });
+        PT.addAnn({ type: 'highlight', pageIndex: 0, rects: [{ xr: 0.1, yr: 0.1, wr: 0.3, hr: 0.04 }], color: '#ffd60a' });
+        PT.addAnn({ type: 'note', pageIndex: 0, xr: 0.8, yr: 0.1, text: 'Smoke note' });
+        try {
+          const outBytes = await PT.output();
+          const outDoc = await pdfjsLib.getDocument({ data: outBytes, isEvalSupported: false }).promise;
+          const p2 = await outDoc.getPage(2);
+          const vp = p2.getViewport({ scale: 1 });
+          const item = (await p2.getTextContent()).items.find((it) => it.str === 'SMOKE MARK');
+          const tx = item ? pdfjsLib.Util.transform(vp.transform, item.transform) : null;
+          t('pdf text box burns upright on a rotated page',
+            !!tx && tx[0] > 0 && Math.abs(tx[1]) < 0.01 && Math.abs(tx[4] - (0.1 * vp.width + 4)) < 3,
+            tx ? tx.map((v) => v.toFixed(1)).join(',') : 'text not found');
+          const notes = (await (await outDoc.getPage(1)).getAnnotations()).filter((a) => a.annotationType === 1);
+          t('pdf sticky note becomes a PDF annotation', notes.length === 1);
+          outDoc.destroy();
+        } catch (err) {
+          t('pdf text box burns upright on a rotated page', false, err.message);
+        }
+        await PT.deletePage(0);
+        t('pdf delete page', PT.numPages() === 1 && PT.anns().every((a) => a.pageIndex === 0), `${PT.numPages()} pages`);
+        for (let k = 0; k < 8 && ped.commands.canUndo(); k++) await ped.commands.undo();
+        t('pdf undo restores pages and annotations',
+          PT.numPages() === 2 && PT.placementsCount() === 0 && PT.pageSizes()[1][2] === 0,
+          `${PT.numPages()} pages, ${PT.placementsCount()} edits, rot ${PT.pageSizes()[1][2]}`);
+        t('pdf page ranges parse', JSON.stringify(PT.parseRanges('1-2', 2)) === '[0,1]' && PT.parseRanges('3', 2) === null);
+        for (let i = 0; i < 60 && !PT.firstPageRendered(); i++) await wait(100);
       }
 
       if (ped.commands && ped.commands.find) await ped.commands.find();
@@ -1131,6 +1967,16 @@
       }
     } catch (err) {
       t('suite crashed', false, err.stack || err.message);
+    }
+    try {
+      await shellSuite(T, cfg, joinTmp);
+    } catch (err) {
+      t('shell suite crashed', false, err.stack || err.message);
+    }
+    try {
+      await slidesSuite(T, cfg, joinTmp);
+    } catch (err) {
+      t('slides suite crashed', false, err.stack || err.message);
     }
     window.margo.smoke.report(results);
   });

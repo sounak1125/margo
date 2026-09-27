@@ -64,30 +64,50 @@ function tokenFile(userData) {
   return path.join(userData, 'google-auth.bin');
 }
 
+/* The store is encrypted with the OS keychain when there is one. A store
+   written while there was none (a Linux session without a keyring) is plain
+   JSON, and reading it once a keyring appears used to fail the decrypt and
+   sign the author out; each form is recognised on its own now. */
 function readStore(userData) {
   const f = tokenFile(userData);
-  if (!fs.existsSync(f)) return null;
+  let buf;
+  try { buf = fs.readFileSync(f); } catch { return null; }
+  let json = null;
+  const text = buf.toString('utf8');
+  if (text.trimStart().startsWith('{')) {
+    json = text;
+  } else {
+    try {
+      if (safeStorage.isEncryptionAvailable()) json = safeStorage.decryptString(buf);
+    } catch { json = null; }
+  }
+  if (!json) return null;
   try {
-    const buf = fs.readFileSync(f);
-    let json;
-    if (safeStorage.isEncryptionAvailable()) {
-      json = safeStorage.decryptString(buf);
-    } else {
-      json = buf.toString('utf8');
-    }
     const data = JSON.parse(json);
-    return data && data.refreshToken ? data : null;
+    return data && typeof data.refreshToken === 'string' && data.refreshToken ? data : null;
   } catch {
     return null;
   }
 }
 
+/* Owner-only and atomic: without a keychain the refresh token is stored in
+   the clear, and it used to land world-readable (0644) - a long-lived key to
+   the author's Drive for any other account on the machine. */
 function writeStore(userData, data) {
   const payload = JSON.stringify(data);
   const buf = safeStorage.isEncryptionAvailable()
     ? safeStorage.encryptString(payload)
     : Buffer.from(payload, 'utf8');
-  fs.writeFileSync(tokenFile(userData), buf);
+  const dest = tokenFile(userData);
+  const tmp = dest + '.' + process.pid + '.tmp';
+  try {
+    fs.writeFileSync(tmp, buf, { mode: 0o600 });
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+  try { fs.chmodSync(dest, 0o600); } catch {}
 }
 
 function clearStore(userData) {
@@ -142,6 +162,29 @@ async function pictureDataUrl(url) {
   }
 }
 
+/* The consent page Margo is waiting on, so pressing Sign in again while one
+   is open brings that page back instead of doing nothing for three minutes. */
+let pendingAuthUrl = null;
+let cancelPending = null;
+
+function reopenPendingSignIn() {
+  if (!pendingAuthUrl) return false;
+  shell.openExternal(pendingAuthUrl).catch(() => {});
+  return true;
+}
+
+function cancelSignIn() {
+  if (cancelPending) cancelPending();
+}
+
+/* server.close() only stops new connections; a browser holding a keep-alive
+   connection open kept the loopback port - and this process - listening
+   until it gave up on its own. */
+function shutdown(server) {
+  try { server.close(); } catch {}
+  try { if (typeof server.closeAllConnections === 'function') server.closeAllConnections(); } catch {}
+}
+
 async function signInWithBrowser(cfg) {
   const { verifier, challenge } = pkce();
   const state = newState();
@@ -153,32 +196,45 @@ async function signInWithBrowser(cfg) {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      try { server.close(); } catch {}
+      pendingAuthUrl = null;
+      cancelPending = null;
+      shutdown(server);
       reject(new Error('Sign-in timed out. Try again.'));
     }, AUTH_TIMEOUT_MS);
     settle = (err, store) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      setTimeout(() => { try { server.close(); } catch {} }, 100);
+      pendingAuthUrl = null;
+      cancelPending = null;
+      // Let the "you can close this window" page finish sending first.
+      setTimeout(() => shutdown(server), 100);
       if (err) reject(err);
       else resolve(store);
     };
   });
+  // A rejection nobody awaits yet (the browser failed to open, say) must not
+  // surface as an unhandled rejection; callers still get it from `done`.
+  done.catch(() => {});
 
   const server = http.createServer((req, res) => {
     void (async () => {
       try {
         const u = new URL(req.url || '/', 'http://127.0.0.1');
         if (u.pathname !== '/' && u.pathname !== '') {
-          res.writeHead(404);
+          res.writeHead(404, { Connection: 'close' });
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          res.writeHead(405, { Connection: 'close' });
           res.end();
           return;
         }
         const code = u.searchParams.get('code');
         const err = u.searchParams.get('error');
         if (!code && !err) {
-          res.writeHead(204);
+          res.writeHead(204, { Connection: 'close' });
           res.end();
           return;
         }
@@ -195,7 +251,7 @@ async function signInWithBrowser(cfg) {
           return;
         }
         if (finishing || !client) {
-          res.writeHead(204);
+          res.writeHead(204, { Connection: 'close' });
           res.end();
           return;
         }
@@ -229,8 +285,16 @@ async function signInWithBrowser(cfg) {
     })();
   });
 
+  // Slow or idle connections cannot pin the server open.
+  server.headersTimeout = 15000;
+  server.requestTimeout = 15000;
+  server.keepAliveTimeout = 1000;
+
   await new Promise((resolve, reject) => {
-    server.once('error', reject);
+    server.once('error', (e) => {
+      settle(e);
+      reject(e);
+    });
     server.listen(0, '127.0.0.1', resolve);
   });
   const port = server.address().port;
@@ -244,7 +308,15 @@ async function signInWithBrowser(cfg) {
     code_challenge: challenge,
     code_challenge_method: 'S256'
   });
-  await shell.openExternal(url);
+  pendingAuthUrl = url;
+  cancelPending = () => settle(new Error('Sign-in was cancelled.'));
+  try {
+    await shell.openExternal(url);
+  } catch (e) {
+    // No browser could be opened: stop listening now rather than holding the
+    // port (and the sign-in lock) for the full timeout.
+    settle(new Error('Could not open your web browser to sign in.'));
+  }
   return done;
 }
 
@@ -272,8 +344,30 @@ function forgetTokenClient() {
   tokenClientKey = '';
 }
 
+/* A refresh token the author revoked (or Google expired - Testing-mode
+   consent screens expire them after 7 days) fails every call with a bare
+   "invalid_grant", while Margo kept showing them signed in. That is reported
+   as its own error so the caller can sign the author out and say why. */
+class SignInExpiredError extends Error {
+  constructor() {
+    super('Your Google sign-in has expired or was revoked. Sign in with Google again.');
+    this.code = 'SIGNIN_EXPIRED';
+  }
+}
+
 async function accessToken(cfg, store) {
-  const tok = await clientFor(cfg, store).getAccessToken();
+  let tok;
+  try {
+    tok = await clientFor(cfg, store).getAccessToken();
+  } catch (err) {
+    const data = err && (err.response?.data || err.data);
+    const code = (data && data.error) || (err && err.message) || '';
+    if (/invalid_grant/i.test(String(code))) {
+      forgetTokenClient();
+      throw new SignInExpiredError();
+    }
+    throw new Error(oauthErrorMessage(err));
+  }
   const token = typeof tok === 'string' ? tok : (tok && tok.token);
   if (!token) throw new Error('Could not refresh Google access token.');
   return token;
@@ -285,6 +379,10 @@ module.exports = {
   writeStore,
   clearStore,
   signInWithBrowser,
+  reopenPendingSignIn,
+  cancelSignIn,
   accessToken,
+  stateMatches,
+  SignInExpiredError,
   pictureDataUrl
 };

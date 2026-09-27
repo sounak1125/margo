@@ -9,8 +9,33 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  # One draft release per tag, created up front: three builds racing to
+  # create it could each open their own. electron-builder uploads into the
+  # draft, and it is published only once every platform has built, so
+  # installed copies never see a release that lacks their latest*.yml.
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "Margo ${GITHUB_REF_NAME#v}" --notes ""
+
+  build:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win
+          - os: macos-latest
+            args: --mac
+          - os: ubuntu-latest
+            args: --linux
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -23,6 +48,13 @@ jobs:
 
       - run: npm run icons
 
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npm test
+
       - name: Build and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -30,4 +62,13 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           MARGO_GOOGLE_CLIENT_ID: ${{ secrets.MARGO_GOOGLE_CLIENT_ID }}
           MARGO_GOOGLE_CLIENT_SECRET: ${{ secrets.MARGO_GOOGLE_CLIENT_SECRET }}
-        run: npm run dist -- --publish always
+        run: npm run dist -- ${{ matrix.args }} --publish always
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

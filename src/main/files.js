@@ -9,6 +9,9 @@ const TurndownService = require('turndown');
 const { gfm } = require('turndown-plugin-gfm');
 const ExcelJS = require('exceljs');
 const JSZip = require('jszip');
+const fidelity = require('./docx-fidelity');
+const slides = require('./slides');
+const sheetIo = require('./sheet-io');
 
 marked.setOptions({ gfm: true });
 
@@ -39,7 +42,14 @@ const HIGHLIGHT_MAP = {
 const DOCX_STYLE_MAP = [
   "br[type='page'] => hr.margo-page-break",
   'u => u',
-  'strike => s'
+  'strike => s',
+  // Paragraph styles Margo writes (and Word ships) that have a Margo shape.
+  "p[style-name='Title'] => p.margo-title:fresh",
+  "p[style-name='Subtitle'] => p.margo-subtitle:fresh",
+  "p[style-name='Quote'] => blockquote > p:fresh",
+  "p[style-name='Intense Quote'] => blockquote > p:fresh",
+  "p[style-name='Code'] => pre:fresh",
+  "p[style-name='heading 4'] => h4:fresh"
 ].concat(
   Object.keys(HIGHLIGHT_MAP).map(
     (word) => "highlight[color='" + word + "'] => mark.hl-" + HIGHLIGHT_MAP[word]
@@ -65,9 +75,10 @@ function paragraphTag(styleName) {
   const s = String(styleName || '').trim();
   const m = /^heading\s*([1-6])$/i.exec(s);
   if (m) return 'h' + m[1];
-  if (/^title$/i.test(s)) return 'h1';
-  if (/^subtitle$/i.test(s)) return 'h2';
-  if (/quote/i.test(s)) return 'blockquote';
+  if (/^title$/i.test(s)) return 'p.margo-title';
+  if (/^subtitle$/i.test(s)) return 'p.margo-subtitle';
+  if (/quote/i.test(s)) return 'blockquote > p';
+  if (/^code$/i.test(s)) return 'pre';
   return 'p';
 }
 
@@ -92,14 +103,30 @@ function paragraphCss(p) {
   else if (hangPt) css.push('text-indent:-' + hangPt.toFixed(1) + 'pt');
   if (p.__margoLine) css.push('line-height:' + p.__margoLine);
   if (p.__margoShade) css.push('background-color:#' + p.__margoShade);
+  if (p.__margoBefore != null) css.push('margin-top:' + p.__margoBefore + 'pt');
+  if (p.__margoAfter != null) css.push('margin-bottom:' + p.__margoAfter + 'pt');
+  if (p.__margoRule) css.push('border-bottom:1px solid #' + p.__margoRule);
   return css.join(';');
+}
+
+/* A font named in a Word file may not be installed here (Consolas on
+   Linux, Calibri on a Mac); without a generic family after it the browser
+   drew the text in its default serif, so a code block came out in Times. */
+const MONO_FONTS = /^(consolas|courier( new)?|cascadia (code|mono)|menlo|monaco|lucida console|source code pro|fira (code|mono)|jetbrains mono|dejavu sans mono|liberation mono|sf mono)$/i;
+const SERIF_FONTS = /^(times( new roman)?|georgia|cambria|garamond|palatino( linotype)?|book antiqua|baskerville|constantia|liberation serif|dejavu serif|noto serif)$/i;
+function fontStack(name) {
+  const f = String(name || '').replace(/[;"']/g, '').trim();
+  if (!f) return '';
+  const generic = MONO_FONTS.test(f) ? 'monospace' : SERIF_FONTS.test(f) ? 'serif' : 'sans-serif';
+  return (/\s/.test(f) ? '"' + f + '"' : f) + ', ' + generic;
 }
 
 function runCss(r) {
   const css = [];
-  if (r.font) css.push('font-family:' + String(r.font).replace(/[;"']/g, ''));
+  if (r.font) css.push('font-family:' + fontStack(r.font).replace(/"/g, "'"));
   if (r.fontSize) css.push('font-size:' + r.fontSize + 'pt');
   if (r.__margoColor) css.push('color:#' + r.__margoColor);
+  if (r.__margoShade) css.push('background-color:#' + r.__margoShade);
   return css.join(';');
 }
 
@@ -110,15 +137,26 @@ function runCss(r) {
    painting text the wrong colour. */
 function readDirectFormatting(xml) {
   const colors = [];
-  const runRe = /<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
+  // Self-closing <w:r/> and <w:p/> count too: mammoth's model has them, and
+  // one uncounted empty paragraph abandoned every correlation below.
+  const runRe = /<w:r(?:\s[^>]*?)?\/>|<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
   let m;
+  const runShades = [];
   while ((m = runRe.exec(xml))) {
     const c = /<w:color[^>]*w:val="([0-9A-Fa-f]{6})"/.exec(m[0]);
     colors.push(c && c[1].toLowerCase() !== 'auto' ? c[1] : null);
+    /* Character shading is how a highlight colour Word has no name for
+       travels; a named highlight is mammoth's and is left to it. */
+    const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(m[0]);
+    const rs = rPr && !/<w:highlight\b/.test(rPr[0]) ? /<w:shd[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(rPr[0]) : null;
+    runShades.push(rs && rs[1].toLowerCase() !== 'ffffff' ? rs[1] : null);
   }
+  const befores = [];
+  const afters = [];
+  const rules = [];
   const lines = [];
   const shades = [];
-  const paraRe = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  const paraRe = /<w:p(?:\s[^>]*?)?\/>|<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
   while ((m = paraRe.exec(xml))) {
     const s = /<w:spacing[^>]*w:line="(\d+)"[^>]*\/?>/.exec(m[0]);
     const rule = /<w:spacing[^>]*w:lineRule="([a-z]+)"/i.exec(m[0]);
@@ -133,8 +171,20 @@ function readDirectFormatting(xml) {
     const props = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(m[0]);
     const shd = props ? /<w:shd[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(props[0]) : null;
     shades.push(shd && shd[1].toLowerCase() !== 'ffffff' ? shd[1] : null);
+    /* Space before and after a paragraph, and a bottom rule (how a
+       horizontal line is written). Autospacing is left to the reader. */
+    const sp = props ? /<w:spacing\b[^>]*\/>/.exec(props[0]) : null;
+    const b = sp && !/w:beforeAutospacing="(1|true)"/.test(sp[0]) ? /w:before="(\d+)"/.exec(sp[0]) : null;
+    const a = sp && !/w:afterAutospacing="(1|true)"/.test(sp[0]) ? /w:after="(\d+)"/.exec(sp[0]) : null;
+    befores.push(b ? +(parseInt(b[1], 10) / 20).toFixed(1) : null);
+    afters.push(a ? +(parseInt(a[1], 10) / 20).toFixed(1) : null);
+    const pBdr = props ? /<w:pBdr>[\s\S]*?<\/w:pBdr>/.exec(props[0]) : null;
+    const bottom = pBdr ? /<w:bottom\b[^>]*\/>/.exec(pBdr[0]) : null;
+    const ruled = bottom && !/w:val="(nil|none)"/.test(bottom[0]);
+    const ruleColor = ruled ? /w:color="([0-9A-Fa-f]{6})"/.exec(bottom[0]) : null;
+    rules.push(ruled ? (ruleColor ? ruleColor[1] : 'a6a6a6') : null);
   }
-  return { colors, lines, shades };
+  return { colors, lines, shades, runShades, befores, afters, rules };
 }
 
 function collectFormatting(doc, direct) {
@@ -146,6 +196,14 @@ function collectFormatting(doc, direct) {
   });
   if (direct.colors.length === runs.length) {
     runs.forEach((r, i) => { if (direct.colors[i]) r.__margoColor = direct.colors[i]; });
+    if (direct.runShades) runs.forEach((r, i) => { if (direct.runShades[i]) r.__margoShade = direct.runShades[i]; });
+  }
+  if (direct.befores && direct.befores.length === paras.length) {
+    paras.forEach((p, i) => {
+      if (direct.befores[i] != null) p.__margoBefore = direct.befores[i];
+      if (direct.afters[i] != null) p.__margoAfter = direct.afters[i];
+      if (direct.rules[i]) p.__margoRule = direct.rules[i];
+    });
   }
   if (direct.lines.length === paras.length) {
     paras.forEach((p, i) => { if (direct.lines[i]) p.__margoLine = direct.lines[i]; });
@@ -217,15 +275,37 @@ function applyFormattingNames(doc, direct, built) {
 }
 
 function inlineFormattingClasses(html, classCss) {
-  let out = html;
-  classCss.forEach((css, cls) => {
-    const re = new RegExp(' class="' + cls + '"', 'g');
-    out = out.replace(re, ' style="' + css + '"');
+  if (!classCss || !classCss.size) return html;
+  /* A synthetic class can share its attribute with a real one
+     ("margo-title margopara3"), so each class list is taken apart. */
+  return html.replace(/ class="([^"]*)"/g, (m, list) => {
+    const keep = [];
+    const css = [];
+    list.split(/\s+/).filter(Boolean).forEach((c) => {
+      if (classCss.has(c)) css.push(classCss.get(c));
+      else keep.push(c);
+    });
+    if (!css.length) return m;
+    return (keep.length ? ' class="' + keep.join(' ') + '"' : '') + ' style="' + css.join(';') + '"';
   });
-  return out;
 }
 
 async function convertDocxHtml(filePath) {
+  const html = await convertDocxHtmlBase(filePath);
+  /* Picture sizes, table borders, rules and checklists mammoth does not
+     carry, matched back to its output by document order. */
+  try {
+    const zip = await JSZip.loadAsync(await fsp.readFile(filePath));
+    const docFile = zip.file('word/document.xml');
+    const xml = docFile ? await docFile.async('string') : '';
+    // Page breaks first: the DOM pass would split <p><hr></p> apart.
+    return fidelity.postProcessImportedHtml(restorePageBreaks(html), fidelity.readImportExtras(xml));
+  } catch {
+    return html;
+  }
+}
+
+async function convertDocxHtmlBase(filePath) {
   try {
     return await convertDocxHtmlInner(filePath);
   } catch (err) {
@@ -233,7 +313,7 @@ async function convertDocxHtml(filePath) {
        writing HTML. Losing the formatting pass, or worst case falling back
        to plain text, beats refusing to open the document at all. */
     try {
-      const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+      const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP, ignoreEmptyParagraphs: false });
       return plain.value || '';
     } catch {
       const raw = await mammoth.extractRawText({ path: filePath }).catch(() => null);
@@ -257,10 +337,11 @@ async function convertDocxHtmlInner(filePath) {
   let model = null;
   await mammoth.convertToHtml({ path: filePath }, {
     styleMap: DOCX_STYLE_MAP,
+    ignoreEmptyParagraphs: false,
     transformDocument: (doc) => { model = doc; return doc; }
   });
   if (!model) {
-    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP, ignoreEmptyParagraphs: false });
     return plain.value || '';
   }
 
@@ -271,12 +352,15 @@ async function convertDocxHtmlInner(filePath) {
     built = { styleMap: [], classCss: new Map(), runStyles: new Map(), paraStyles: new Map() };
   }
   if (!built.styleMap.length) {
-    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP });
+    const plain = await mammoth.convertToHtml({ path: filePath }, { styleMap: DOCX_STYLE_MAP, ignoreEmptyParagraphs: false });
     return plain.value || '';
   }
 
+  /* Empty paragraphs are the author's blank lines; mammoth drops them by
+     default, so every blank line vanished on the first round trip. */
   const result = await mammoth.convertToHtml({ path: filePath }, {
     styleMap: DOCX_STYLE_MAP.concat(built.styleMap),
+    ignoreEmptyParagraphs: false,
     transformDocument: (doc) => { applyFormattingNames(doc, direct, built); return doc; }
   });
   return inlineFormattingClasses(result.value || '', built.classCss);
@@ -304,6 +388,7 @@ function kindFromPath(p) {
   if (ext === '.docx') return 'doc';
   if (ext === '.xlsx' || ext === '.csv') return 'sheet';
   if (ext === '.pdf') return 'pdf';
+  if (ext === '.pptx') return 'slides';
   return null;
 }
 
@@ -311,6 +396,7 @@ function kindFromPath(p) {
 
 async function openPath(filePath) {
   const stat = await fsp.stat(filePath);
+  if (!stat.isFile()) throw new Error('That is not a file Margo can open.');
   if (stat.size > MAX_OPEN_BYTES) throw new Error('File is larger than 500 MB — too big for Margo.');
   const ext = path.extname(filePath).toLowerCase();
   const name = path.basename(filePath);
@@ -329,198 +415,20 @@ async function openPath(filePath) {
     return { kind: 'doc', name, path: filePath, html, notes, layout };
   }
   if (ext === '.xlsx') {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(filePath);
-    return { kind: 'sheet', name, path: filePath, ...workbookToModel(wb) };
+    return { kind: 'sheet', name, path: filePath, ...(await sheetIo.readXlsx(filePath)) };
   }
   if (ext === '.csv') {
-    const wb = new ExcelJS.Workbook();
-    await wb.csv.readFile(filePath, { map: (v) => v });
-    const model = workbookToModel(wb);
-    model.sheets[0].name = sanitizeSheetName(path.basename(filePath, ext)) || 'Sheet1';
-    return { kind: 'sheet', name, path: filePath, ...model };
+    return { kind: 'sheet', name, path: filePath, ...(await sheetIo.readCsv(filePath)) };
   }
   if (ext === '.pdf') {
     // viewer loads the bytes itself via file:read-binary
     return { kind: 'pdf', name, path: filePath };
   }
+  if (ext === '.pptx') {
+    const deck = await slides.readPptx(filePath);
+    return { kind: 'slides', name, path: filePath, deck };
+  }
   throw new Error(`Unsupported file type: ${ext || '(none)'}`);
-}
-
-function normalizeCell(v) {
-  if (v === null || v === undefined) return '';
-  const t = typeof v;
-  if (t === 'string') return v;
-  if (t === 'number') return String(v);
-  if (t === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (v instanceof Date) return formatDate(v);
-  if (t === 'object') {
-    if ('formula' in v) {
-      return '=' + v.formula;
-    }
-    if ('sharedFormula' in v) {
-      if (v.result !== undefined) return normalizeCell(v.result);
-      return '';
-    }
-    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join('');
-    if ('error' in v) return String(v.error);
-    if ('text' in v) return normalizeCell(v.text);
-    if ('hyperlink' in v) return String(v.hyperlink);
-  }
-  return String(v);
-}
-
-const FONT_FACE_SUFFIXES = [
-  'Thin Italic', 'Hairline Italic', 'ExtraLight Italic', 'UltraLight Italic', 'Light Italic',
-  'Medium Italic', 'SemiBold Italic', 'DemiBold Italic', 'Bold Italic',
-  'ExtraBold Italic', 'UltraBold Italic', 'Black Italic', 'Heavy Italic',
-  'Extra Light', 'Ultra Light', 'Semi Bold', 'Demi Bold', 'Extra Bold', 'Ultra Bold',
-  'Thin', 'Hairline', 'ExtraLight', 'UltraLight', 'Light',
-  'Medium', 'SemiBold', 'DemiBold', 'ExtraBold', 'UltraBold',
-  'Black', 'Heavy', 'Bold', 'Italic', 'Oblique', 'Regular'
-];
-
-function splitExcelFont(name, bold, italic) {
-  const raw = String(name || '').trim();
-  const fallback = bold && italic ? 'Bold Italic' : bold ? 'Bold' : italic ? 'Italic' : 'Regular';
-  if (!raw) return { font: 'Calibri', face: fallback };
-  const lower = raw.toLowerCase();
-  for (const suf of FONT_FACE_SUFFIXES) {
-    const token = ' ' + suf.toLowerCase();
-    if (lower.endsWith(token) && raw.length > suf.length + 1) {
-      return { font: raw.slice(0, raw.length - suf.length - 1).trim(), face: suf };
-    }
-  }
-  return { font: raw, face: fallback };
-}
-
-function excelFontFromStyle(st) {
-  const family = st.font || 'Calibri';
-  const face = st.face || (st.bold && st.italic ? 'Bold Italic' : st.bold ? 'Bold' : st.italic ? 'Italic' : 'Regular');
-  const compact = String(face).toLowerCase().replace(/[_\s]+/g, '');
-  const italic = compact.includes('italic') || compact.includes('oblique') || !!st.italic;
-  let bold = !!st.bold;
-  if (st.face) {
-    bold = compact.includes('extrabold') || compact.includes('ultrabold') ||
-      compact.includes('black') || compact.includes('heavy') ||
-      (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'));
-  }
-  let name = family;
-  const weightPart = String(face).replace(/\s*(italic|oblique)\s*/ig, ' ').trim();
-  const weightCompact = weightPart.toLowerCase().replace(/[_\s]+/g, '');
-  if (weightPart && !/^(regular|normal|bold)$/.test(weightCompact)) {
-    name = `${family} ${weightPart}`.replace(/\s+/g, ' ').trim();
-  }
-  return {
-    name,
-    size: st.size || 11,
-    bold,
-    italic,
-    underline: !!st.underline,
-    strike: !!st.strike,
-    color: st.color ? { argb: 'FF' + st.color.replace('#', '') } : undefined
-  };
-}
-
-const THICK_BORDERS = ['medium', 'thick', 'double'];
-
-/* Margo's grid carries a single border style per cell rather than one per
-   edge, so the four Excel edges collapse to the nearest of what it can draw. */
-function excelBorderKind(border) {
-  if (!border) return null;
-  const edges = ['top', 'right', 'bottom', 'left']
-    .map((k) => border[k] && border[k].style)
-    .filter(Boolean);
-  if (!edges.length) return null;
-  if (edges.some((style) => THICK_BORDERS.includes(style))) return 'thick';
-  return edges.length === 4 ? 'all' : 'outer';
-}
-
-function extractCellStyle(cell) {
-  const s = {};
-  if (cell.font) {
-    const split = splitExcelFont(cell.font.name, !!cell.font.bold, !!cell.font.italic);
-    s.font = split.font;
-    s.face = split.face;
-    if (cell.font.size) s.size = cell.font.size;
-    if (cell.font.bold) s.bold = true;
-    else {
-      const compact = split.face.toLowerCase().replace(/[_\s]+/g, '');
-      if (compact.includes('extrabold') || compact.includes('ultrabold') ||
-          compact.includes('black') || compact.includes('heavy') ||
-          (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'))) {
-        s.bold = true;
-      }
-    }
-    if (cell.font.italic || /italic|oblique/i.test(split.face)) s.italic = true;
-    if (cell.font.underline) s.underline = true;
-    if (cell.font.strike) s.strike = true;
-    if (cell.font.color && cell.font.color.argb) {
-      s.color = '#' + cell.font.color.argb.slice(-6);
-    }
-  }
-  if (cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor && cell.fill.fgColor.argb) {
-    s.fill = '#' + cell.fill.fgColor.argb.slice(-6);
-  }
-  const border = excelBorderKind(cell.border);
-  if (border) s.border = border;
-  if (cell.alignment) {
-    if (cell.alignment.horizontal) s.align = cell.alignment.horizontal;
-    if (cell.alignment.vertical) s.valign = cell.alignment.vertical;
-    if (cell.alignment.wrapText) s.wrap = true;
-  }
-  if (cell.numFmt) {
-    s.numFmt = cell.numFmt;
-  }
-  return Object.keys(s).length ? s : null;
-}
-
-function formatDate(d) {
-  const pad = (n) => String(n).padStart(2, '0');
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  if (d.getHours() || d.getMinutes() || d.getSeconds()) {
-    return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-  return date;
-}
-
-function workbookToModel(wb) {
-  const meta = readMargoMeta(wb);
-  const chartsBySheet = (meta && meta.chartsBySheet) || {};
-  const sheets = [];
-  wb.eachSheet((ws) => {
-    if (ws.name === MARGO_META_SHEET) return;
-    const rows = [];
-    const styles = {};
-    const colWidths = {};
-    const rowHeights = {};
-    ws.columns.forEach((col, idx) => {
-      if (col && col.width) colWidths[idx] = excelWidthToPx(col.width);
-    });
-    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-      // Excel keeps row height in points; the grid works in CSS pixels.
-      if (row.height) rowHeights[rowNumber - 1] = Math.round(row.height * 96 / 72);
-      const arr = [];
-      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        arr[colNumber - 1] = normalizeCell(cell.value);
-        const st = extractCellStyle(cell);
-        if (st) styles[`${rowNumber - 1},${colNumber - 1}`] = st;
-      });
-      for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
-      rows[rowNumber - 1] = arr;
-    });
-    for (let i = 0; i < rows.length; i++) if (rows[i] === undefined) rows[i] = [];
-    sheets.push({
-      name: ws.name || `Sheet${sheets.length + 1}`,
-      rows,
-      styles,
-      colWidths,
-      rowHeights,
-      charts: Array.isArray(chartsBySheet[ws.name]) ? chartsBySheet[ws.name] : []
-    });
-  });
-  if (!sheets.length) sheets.push({ name: 'Sheet1', rows: [], styles: {}, colWidths: {}, rowHeights: {}, charts: [] });
-  return { sheets, active: 0 };
 }
 
 /* ---------------- save ---------------- */
@@ -544,6 +452,9 @@ function saveFilters(kind) {
   if (kind === 'pdf') {
     return [{ name: 'PDF document', extensions: ['pdf'] }];
   }
+  if (kind === 'slides') {
+    return [{ name: 'PowerPoint presentation', extensions: ['pptx'] }];
+  }
   return [
     { name: 'Excel workbook', extensions: ['xlsx'] },
     { name: 'CSV (active sheet)', extensions: ['csv'] }
@@ -553,7 +464,7 @@ function saveFilters(kind) {
 function suggestSavePath(req, documentsDir) {
   const base = (req.suggestedName || 'Untitled').replace(/\.[^.]+$/, '');
   const dir = req.currentPath ? path.dirname(req.currentPath) : documentsDir;
-  const defExt = req.kind === 'md' ? '.md' : req.kind === 'doc' ? '.docx' : req.kind === 'pdf' ? '.pdf' : '.xlsx';
+  const defExt = req.kind === 'md' ? '.md' : req.kind === 'doc' ? '.docx' : req.kind === 'pdf' ? '.pdf' : req.kind === 'slides' ? '.pptx' : '.xlsx';
   return path.join(dir, base + defExt);
 }
 
@@ -567,15 +478,54 @@ function suggestSavePath(req, documentsDir) {
    If the target is locked the rename throws and the original survives, which
    is what the caller reports to the author. */
 let tmpCounter = 0;
+/* Three more things a plain write-then-rename got wrong:
+   - a symlinked document had its link replaced by a regular file, so the
+     real file never changed; the write now goes to the link's target;
+   - the replacement took default permissions, so a private (0600) file came
+     back readable by everyone after one save; the old mode is carried over;
+   - the data was renamed into place before it reached the disk, so a power
+     cut shortly after a save could leave an empty file; it is fsynced first.
+   On Windows an antivirus or indexer holding the file briefly makes the
+   rename fail with EPERM/EBUSY, so that is retried a few times first. */
+async function resolveWriteTarget(target) {
+  try {
+    const st = await fsp.lstat(target);
+    if (st.isSymbolicLink()) return await fsp.realpath(target);
+  } catch {}
+  return target;
+}
+
+async function renameWithRetry(from, to) {
+  const delays = process.platform === 'win32' ? [50, 150, 400] : [];
+  for (let i = 0; ; i++) {
+    try {
+      return await fsp.rename(from, to);
+    } catch (err) {
+      if (i >= delays.length || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+      await new Promise((r) => setTimeout(r, delays[i]));
+    }
+  }
+}
+
 async function atomicWrite(target, write) {
-  const dir = path.dirname(target);
+  const dest = await resolveWriteTarget(target);
+  const dir = path.dirname(dest);
   const tmp = path.join(
     dir,
-    '.' + path.basename(target) + '.margo-' + process.pid + '-' + (tmpCounter++) + '.tmp'
+    '.' + path.basename(dest) + '.margo-' + process.pid + '-' + (tmpCounter++) + '.tmp'
   );
+  let mode = null;
+  try { mode = (await fsp.stat(dest)).mode & 0o7777; } catch {}
   try {
     await write(tmp);
-    await fsp.rename(tmp, target);
+    if (mode != null && process.platform !== 'win32') {
+      try { await fsp.chmod(tmp, mode); } catch {}
+    }
+    try {
+      const fh = await fsp.open(tmp, 'r+');
+      try { await fh.sync(); } finally { await fh.close(); }
+    } catch {}
+    await renameWithRetry(tmp, dest);
   } catch (err) {
     try { await fsp.unlink(tmp); } catch {}
     throw err;
@@ -589,12 +539,12 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
     const md = data.markdown ?? '';
     if (MD_EXTS.includes(ext)) return atomicWrite(target, (tmp) => fsp.writeFile(tmp, md, 'utf8'));
     if (ext === '.docx') {
-      let buf = await htmlToDocxBuffer(marked.parse(md), titleOf(target));
+      let buf = await htmlToDocxBuffer(markdownBody(data), titleOf(target));
       buf = await maybeEmbedDocxThumb(buf, thumbDataUrl);
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
     if (ext === '.html') {
-      const html = htmlDocument(marked.parse(md), titleOf(target));
+      const html = htmlDocument(markdownBody(data), titleOf(target));
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, html, 'utf8'));
     }
     throw new Error(`Can't save markdown as ${ext}`);
@@ -614,7 +564,7 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, md, 'utf8'));
     }
     if (ext === '.html') {
-      const out = htmlDocument(html, titleOf(target), data.layout);
+      const out = docHtmlDocument(html, titleOf(target), data.layout);
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, out, 'utf8'));
     }
     throw new Error(`Can't save document as ${ext}`);
@@ -623,13 +573,10 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
   if (kind === 'sheet') {
     const sheets = data.sheets && data.sheets.length ? data.sheets : [{ name: 'Sheet1', rows: [] }];
     if (ext === '.xlsx') {
-      const wb = modelToWorkbook(sheets);
-      return atomicWrite(target, (tmp) => wb.xlsx.writeFile(tmp));
+      return atomicWrite(target, (tmp) => sheetIo.writeXlsx(tmp, { ...data, sheets }));
     }
     if (ext === '.csv') {
-      const idx = Math.min(Math.max(data.active || 0, 0), sheets.length - 1);
-      const wb = modelToWorkbook([sheets[idx]]);
-      return atomicWrite(target, (tmp) => wb.csv.writeFile(tmp));
+      return atomicWrite(target, (tmp) => sheetIo.writeCsv(tmp, { ...data, sheets }));
     }
     throw new Error(`Can't save spreadsheet as ${ext}`);
   }
@@ -640,6 +587,14 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
     throw new Error(`Can't save PDF as ${ext}`);
+  }
+
+  if (kind === 'slides') {
+    if (ext === '.pptx') {
+      const buf = await slides.writePptx(data.deck, titleOf(target));
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
+    }
+    throw new Error(`Can't save a presentation as ${ext}`);
   }
 
   throw new Error(`Unknown document kind: ${kind}`);
@@ -688,20 +643,6 @@ function applyStrikeFences(xml) {
   return out.split(STRIKE_ON).join('').split(STRIKE_OFF).join('');
 }
 
-async function restoreStrikethrough(docxBuf) {
-  try {
-    const zip = await JSZip.loadAsync(docxBuf);
-    const file = zip.file('word/document.xml');
-    if (!file) return docxBuf;
-    const xml = await file.async('string');
-    if (xml.indexOf(STRIKE_ON) < 0) return docxBuf;
-    zip.file('word/document.xml', applyStrikeFences(xml));
-    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  } catch {
-    return docxBuf;
-  }
-}
-
 /* Page dimensions in twips, portrait-oriented: html-to-docx swaps width and
    height itself when the orientation is landscape. Without this every export
    came out US Letter no matter what the document actually was. */
@@ -709,7 +650,8 @@ const PAGE_TWIPS = {
   letter: { width: 12240, height: 15840 },
   a4: { width: 11906, height: 16838 },
   legal: { width: 12240, height: 20160 },
-  executive: { width: 10440, height: 15120 }
+  executive: { width: 10440, height: 15120 },
+  a5: { width: 8391, height: 11906 }
 };
 
 function docxPageSize(layout) {
@@ -729,10 +671,7 @@ function docxPageSize(layout) {
 }
 
 async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
-  const htmlString =
-    `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title || 'Document')}</title></head>` +
-    `<body>${fenceStrikeText(bodyHtml)}</body></html>`;
-
+  layout = layout || {};
   const marginPresets = {
     normal: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
     narrow: { top: 720, right: 720, bottom: 720, left: 720 },
@@ -755,29 +694,57 @@ async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
   const margins = { ...base, header: 720, footer: 720, gutter: 0 };
   const orientation = (layout && layout.orientation === 'landscape') ? 'landscape' : 'portrait';
   const pageSize = docxPageSize(layout);
+  const contentWidthTw = Math.max(1440,
+    (orientation === 'landscape' ? pageSize.height : pageSize.width) - margins.left - margins.right);
 
+  /* Highlights, spacing, styles, header rows, borders, rules and the space
+     between two formatted words are fenced here and written into the XML
+     once html-to-docx is done (see docx-fidelity.js). */
+  const prep = fidelity.prepareDocxHtml(bodyHtml, { contentWidthTw });
+  const htmlString =
+    `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title || 'Document')}</title></head>` +
+    `<body>${fenceStrikeText(prep.html)}</body></html>`;
+
+  const hasHeader = !!layout.headerText;
+  const hasFooter = !!(layout.footerText || layout.showPageNumbers);
   const docOpts = {
     title: title || 'Document',
     font: 'Calibri',
     fontSize: 22,
     table: { row: { cantSplit: true } },
-    footer: !!(layout && (layout.footerText || layout.showPageNumbers)),
-    pageNumber: !!(layout && layout.showPageNumbers),
+    // Without header: true html-to-docx drops the header altogether.
+    header: hasHeader,
+    footer: hasFooter,
+    pageNumber: false,
     orientation,
     pageSize,
     margins
   };
 
-  const headerHtml = (layout && layout.headerText)
-    ? `<p style="text-align:right;font-size:9pt;color:#888;">${escapeHtml(layout.headerText)}</p>`
-    : null;
-  const footerHtml = (layout && layout.footerText)
-    ? `<p style="text-align:center;font-size:9pt;color:#888;">${escapeHtml(layout.footerText)}</p>`
-    : null;
+  // Placeholders: the parts are rewritten whole by finishDocx.
+  const headerHtml = hasHeader ? '<p>header</p>' : null;
+  const footerHtml = hasFooter ? '<p>footer</p>' : null;
 
-  const buf = await HTMLtoDOCX(htmlString, headerHtml, docOpts, footerHtml);
-  const withStrike = await restoreStrikethrough(Buffer.isBuffer(buf) ? buf : Buffer.from(buf));
-  return Buffer.isBuffer(withStrike) ? withStrike : Buffer.from(withStrike);
+  let buf;
+  try {
+    buf = await HTMLtoDOCX(htmlString, headerHtml, docOpts, footerHtml);
+  } catch (err) {
+    /* html-to-docx throws on markup it cannot model (odd table geometry,
+       exotic CSS). Losing some formatting beats refusing to save: retry
+       with the styling taken off tables and cells. */
+    const safe = htmlString
+      .replace(/<(table|td|th|col|colgroup|tr)\b([^>]*?)\sstyle="[^"]*"/gi, '<$1$2')
+      .replace(/<colgroup\b[\s\S]*?<\/colgroup>/gi, '');
+    buf = await HTMLtoDOCX(safe, headerHtml, docOpts, footerHtml);
+  }
+  const done = await fidelity.finishDocx(Buffer.isBuffer(buf) ? buf : Buffer.from(buf), prep, {
+    extraPass: (xml) => (xml.indexOf(STRIKE_ON) >= 0 ? applyStrikeFences(xml) : xml),
+    headerText: layout.headerText || '',
+    footerText: layout.footerText || '',
+    pageNumbers: !!layout.showPageNumbers,
+    contentWidthTw
+  });
+  return Buffer.isBuffer(done) ? done : Buffer.from(done);
 }
 
 function parseThumbDataUrl(dataUrl) {
@@ -909,7 +876,8 @@ const PAGE_SIZES = [
   { id: 'letter', w: 8.5, h: 11 },
   { id: 'a4', w: 8.27, h: 11.69 },
   { id: 'legal', w: 8.5, h: 14 },
-  { id: 'executive', w: 7.25, h: 10.5 }
+  { id: 'executive', w: 7.25, h: 10.5 },
+  { id: 'a5', w: 5.83, h: 8.27 }
 ];
 // Word's own margin presets, matched by name so the dropdown reflects what the
 // author picked in Word.
@@ -949,13 +917,17 @@ function nearestMargins(sideIn) {
    footer, so the first part of each kind is what it can carry; Word may also
    define separate first-page and even-page variants. */
 function textFromWordPart(xml) {
-  return String(xml || '')
+  /* Fields go first: a page number's instruction and cached result are not
+     header text, and "Page {PAGE} of {NUMPAGES}" would otherwise surface as
+     a footer reading "Page 1 of 1" forever. The words around a page number
+     are dropped with it. */
+  return fidelity.stripFields(xml)
     .replace(/<w:tab[^>]*\/?>/g, ' ')
     .replace(/<\/w:p>/g, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .split('\n').map((s) => s.trim()).filter(Boolean).join(' ')
+    .split('\n').map((s) => s.trim().replace(/\s*\bPage\s*(of)?\s*$/i, '').trim()).filter(Boolean).join(' ')
     .trim();
 }
 
@@ -976,6 +948,13 @@ async function readDocxHeaderFooter(zip) {
   const footer = await pick('footer');
   if (header) out.headerText = header;
   if (footer) out.footerText = footer;
+  /* Page numbers are shown only when the document has them; a Word file
+     without any used to gain "Page 1 of N" on its first save in Margo. */
+  let numbered = false;
+  for (const name of Object.keys(zip.files).filter((f) => /^word\/(header|footer)\d*\.xml$/.test(f))) {
+    if (fidelity.hasPageField(await zip.file(name).async('string'))) { numbered = true; break; }
+  }
+  out.showPageNumbers = numbered;
   return out;
 }
 
@@ -1110,180 +1089,116 @@ ${bodyHtml}
 </html>`;
 }
 
+/* A Word document exported to PDF, printed or saved as HTML: the page
+   geometry, header, footer and page numbers it has in Margo, and the same
+   content styles as the page in the editor (css/doc.css), so what prints is
+   what was on screen. Header and footer use CSS page-margin boxes. */
+const DOC_PAGE_IN = { letter: [8.5, 11], a4: [8.27, 11.69], legal: [8.5, 14], executive: [7.25, 10.5], a5: [5.83, 8.27] };
+const DOC_MARGIN_IN = {
+  normal: [1, 1, 1, 1], narrow: [0.5, 0.5, 0.5, 0.5], moderate: [0.75, 0.75, 0.75, 0.75], wide: [1, 2, 1, 2]
+};
+
+function cssString(s) {
+  return '"' + String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"';
+}
+
+function docHtmlDocument(bodyHtml, title, layout = {}) {
+  const L = layout || {};
+  const land = L.orientation === 'landscape';
+  let [w, h] = DOC_PAGE_IN[L.size] || DOC_PAGE_IN.letter;
+  if (L.pageIn && L.pageIn.w > 0 && L.pageIn.h > 0) { w = Math.min(L.pageIn.w, L.pageIn.h); h = Math.max(L.pageIn.w, L.pageIn.h); }
+  if (land) [w, h] = [h, w];
+  let [mt, mr, mb, ml] = DOC_MARGIN_IN[L.margins] || DOC_MARGIN_IN.normal;
+  if (L.marginIn) ({ top: mt, right: mr, bottom: mb, left: ml } = L.marginIn);
+  const box = 'font-family: Calibri, Carlito, sans-serif; font-size: 8.5pt; color: #8a8a8a;';
+  const marginBoxes =
+    (L.headerText ? `@top-left { content: ${cssString(L.headerText)}; ${box} vertical-align: bottom; padding-bottom: 12pt; }` : '') +
+    (L.footerText ? `@bottom-left { content: ${cssString(L.footerText)}; ${box} vertical-align: top; padding-top: 12pt; }` : '') +
+    (L.showPageNumbers ? `@bottom-right { content: "Page " counter(page) " of " counter(pages); ${box} vertical-align: top; padding-top: 12pt; }` : '');
+  const cols = L.columns > 1 ? `column-count: ${L.columns}; column-gap: 0.4in;` : '';
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title || 'Document')}</title>
+<style>
+  @page { size: ${w}in ${h}in; margin: ${mt}in ${mr}in ${mb}in ${ml}in; ${marginBoxes} }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: Calibri, Carlito, "Segoe UI", sans-serif; font-size: 11pt; line-height: 1.55; color: #1b1b1f; margin: 0; ${cols} }
+  @media screen { body { max-width: ${(w - ml - mr).toFixed(2)}in; margin: 0.6in auto; padding: 0 24px; } }
+  p { margin: 0 0 0.5em; }
+  h1, h2, h3, h4 { font-weight: 700; letter-spacing: -0.01em; margin: 1.15em 0 0.4em; break-after: avoid; }
+  h1 { font-size: 1.75em; } h2 { font-size: 1.4em; } h3 { font-size: 1.18em; } h4 { font-size: 1.05em; }
+  .margo-title { font-size: 2.4em; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 0.2em; }
+  .margo-subtitle { font-size: 1.35em; color: #6b6b70; margin: 0 0 0.9em; }
+  ul, ol { padding-left: 1.7em; margin: 0 0 0.65em; } li { margin: 0.18em 0; }
+  ul.margo-checklist { list-style: none; padding-left: 1.7em; }
+  ul.margo-checklist > li { position: relative; }
+  ul.margo-checklist > li::before { content: "\\2610"; position: absolute; left: -1.45em; }
+  ul.margo-checklist > li.is-checked::before { content: "\\2612"; }
+  ul.margo-checklist > li.is-checked { color: #8a8a8a; text-decoration: line-through; }
+  a { color: #1a5fb4; }
+  blockquote { border-left: 3px solid #c9c9c4; margin: 0.65em 0; padding-left: 15px; color: #5c5c61; font-style: italic; }
+  pre, code { font-family: Consolas, "Cascadia Code", monospace; font-size: 0.9em; background: #f2f2f0; border-radius: 4px; }
+  pre { padding: 10px 12px; white-space: pre-wrap; margin: 0 0 0.65em; } code { padding: 0.1em 0.35em; } pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 0.75em 0; table-layout: fixed; }
+  td, th { border: 1px solid #b9b9b4; padding: 5px 11px; vertical-align: top; overflow-wrap: break-word; }
+  th { font-weight: 700; background: #f4f4f2; text-align: left; }
+  thead { display: table-header-group; } tr { break-inside: avoid; }
+  table.margo-tbl-none td, table.margo-tbl-none th { border-color: transparent; }
+  table.margo-tbl-outer { border: 1px solid #b9b9b4; } table.margo-tbl-outer td, table.margo-tbl-outer th { border-color: transparent; }
+  img { max-width: 100%; } img.margo-wrap-left { float: left; margin: 4px 14px 8px 0; } img.margo-wrap-right { float: right; margin: 4px 0 8px 14px; }
+  hr { border: none; border-top: 1px solid #b9b9b4; margin: 1.2em 0; }
+  sub, sup { font-size: 75%; line-height: 0; position: relative; vertical-align: baseline; } sup { top: -0.5em; } sub { bottom: -0.25em; }
+  div[data-margo-page-break], .page-break { break-before: page; }
+  mark { background: #fef08a; color: inherit; }
+  mark.hl-yellow { background: #ffff00; } mark.hl-green { background: #00ff00; } mark.hl-cyan { background: #00ffff; }
+  mark.hl-pink { background: #ff00ff; } mark.hl-orange { background: #ffa500; } mark.hl-red { background: #ff0000; }
+  mark.hl-gray { background: #c0c0c0; } mark.hl-blue { background: #0000ff; color: #fff; }
+  mark.hl-purple { background: #800080; color: #fff; } mark.hl-darkyellow { background: #808000; color: #fff; }
+  .margo-callout { margin: 1em 0; padding: 10px 14px; border-left: 4px solid #3b82f6; background: #e8f0fe; border-radius: 4px; }
+  .margo-callout-tip { border-left-color: #10b981; background: #e7f8f1; }
+  .margo-callout-warning { border-left-color: #f59e0b; background: #fef3e2; }
+  .margo-callout-quote { border-left-color: #8b5cf6; background: #f1ecfd; font-style: italic; }
+  .margo-callout-title { font-weight: 700; }
+  .margo-toc { margin: 0 0 1em; }
+  .margo-toc-title { font-size: 1.35em; font-weight: 700; margin-bottom: 0.4em; }
+  .margo-toc-entry { display: flex; align-items: baseline; gap: 6px; margin: 0 0 0.25em; }
+  .margo-toc-entry .margo-toc-text { flex: none; max-width: 85%; }
+  .margo-toc-entry::after { content: ""; order: 1; flex: 1; border-bottom: 1px dotted #9a9a9a; transform: translateY(-0.3em); }
+  .margo-toc-entry .margo-toc-page { order: 2; flex: none; }
+  .margo-toc-l2 { padding-left: 1.5em; } .margo-toc-l3 { padding-left: 3em; } .margo-toc-l4 { padding-left: 4.5em; }
+  .margo-footnotes { margin-top: 2em; padding-top: 0.6em; border-top: 1px solid #c9c9c4; font-size: 0.88em; }
+  .margo-footnotes ol { padding-left: 1.5em; }
+  .margo-note-anchor { background: none; }
+</style>
+</head>
+<body>
+${bodyHtml}
+</body>
+</html>`;
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 /* Full HTML document used for PDF export via printToPDF */
+/* The markdown editor sends its own sanitised rendering (footnotes, task
+   boxes, pictures resolved against the note's folder); anything else - a
+   caller with only the text - falls back to marked. */
+function markdownBody(data) {
+  const d = data || {};
+  if (typeof d.html === 'string' && d.html.trim()) return d.html;
+  return marked.parse(d.markdown ?? '');
+}
+
 function htmlForPdfExport({ kind, data, title }) {
-  if (kind === 'md') return htmlDocument(marked.parse(data.markdown ?? ''), title);
-  if (kind === 'doc') return htmlDocument(data.html ?? '<p></p>', title, data.layout);
-  if (kind === 'sheet') {
-    const sheets = (data.sheets && data.sheets.length ? data.sheets : [{ name: 'Sheet1', rows: [] }]);
-    const parts = sheets.map((sheet, i) => {
-      const rows = (sheet.rows || []);
-      const maxCols = rows.reduce((m, r) => Math.max(m, (r || []).length), 1);
-      const body = rows.map((row) =>
-        '<tr>' + Array.from({ length: maxCols }, (_, c) => {
-          const v = row && row[c] != null ? String(row[c]) : '';
-          const num = /^-?[\d,]*\.?\d+%?$/.test(v.trim()) && v.trim() !== '';
-          return `<td${num ? ' class="num"' : ''}>${escapeHtml(v)}</td>`;
-        }).join('') + '</tr>'
-      ).join('');
-      return `${i > 0 ? '<div class="page-break"></div>' : ''}` +
-        `<h2>${escapeHtml(sheet.name || 'Sheet' + (i + 1))}</h2>` +
-        `<table class="sheet">${body || '<tr><td></td></tr>'}</table>`;
-    });
-    return htmlDocument(
-      `<style>
-         table.sheet { border-collapse: collapse; width: 100%; font-size: 11px; }
-         table.sheet td { border: 1px solid #d5d5d2; padding: 4px 8px; }
-         table.sheet td.num { text-align: right; font-variant-numeric: tabular-nums; }
-         table.sheet tr:first-child td { background: #f4f4f2; font-weight: 600; }
-         .page-break { page-break-before: always; }
-         h2 { font-size: 15px; margin: 4px 0 10px; }
-       </style>` + parts.join(''),
-      title
-    );
-  }
+  if (kind === 'md') return htmlDocument(markdownBody(data), title);
+  if (kind === 'slides') return slides.exportHtml(data.deck, title);
+  if (kind === 'doc') return docHtmlDocument(data.html ?? '<p></p>', title, data.layout);
+  if (kind === 'sheet') return htmlDocument(sheetIo.pdfBody(data), title);
   throw new Error(`Can't export ${kind} as PDF`);
-}
-
-function sanitizeSheetName(name) {
-  return String(name || '').replace(/[\\\/\?\*\[\]:]/g, ' ').trim().slice(0, 31);
-}
-
-function excelWidthToPx(w) {
-  return Math.round(Number(w) * 7 + 5);
-}
-
-function pxToExcelWidth(px) {
-  return Math.max(1, Math.min(255, (Number(px) - 5) / 7));
-}
-
-const MARGO_META_SHEET = '__MargoMeta__';
-
-function readMargoMeta(wb) {
-  const ws = wb.getWorksheet(MARGO_META_SHEET);
-  if (!ws) return null;
-  try {
-    const raw = ws.getCell(1, 1).value;
-    const text = raw == null ? '' : (typeof raw === 'object' && raw.text != null ? raw.text : String(raw));
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function writeMargoMeta(wb, sheets) {
-  const chartsBySheet = {};
-  sheets.forEach((sheet) => {
-    if (sheet.charts && sheet.charts.length) {
-      chartsBySheet[sheet.name] = sheet.charts;
-    }
-  });
-  if (!Object.keys(chartsBySheet).length) return;
-  const ws = wb.addWorksheet(MARGO_META_SHEET);
-  ws.state = 'veryHidden';
-  ws.getCell(1, 1).value = JSON.stringify({ version: 1, chartsBySheet });
-}
-
-function applyModelCellStyle(cell, st) {
-  if (!st) return;
-  if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color || st.face) {
-    cell.font = excelFontFromStyle(st);
-  }
-  if (st.fill && st.fill !== '#ffffff') {
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF' + st.fill.replace('#', '') }
-    };
-  }
-  if (st.border) {
-    const edgeStyle = st.border === 'thick' ? 'medium' : 'thin';
-    cell.border = {
-      top: { style: edgeStyle },
-      left: { style: edgeStyle },
-      bottom: { style: edgeStyle },
-      right: { style: edgeStyle }
-    };
-  }
-  if (st.align || st.valign || st.wrap) {
-    cell.alignment = {
-      horizontal: st.align || undefined,
-      vertical: st.valign || undefined,
-      wrapText: !!st.wrap
-    };
-  }
-  if (st.numFmt) {
-    cell.numFmt = st.numFmt;
-  }
-}
-
-function modelToWorkbook(sheets) {
-  const wb = new ExcelJS.Workbook();
-  /* The hidden sheet Margo keeps its chart metadata on is added afterwards,
-     so a workbook with a sheet of that name collided with it and the whole
-     save threw. Claiming the name up front renames the author's sheet
-     instead. */
-  const used = new Set([MARGO_META_SHEET.toLowerCase()]);
-  sheets.forEach((sheet, i) => {
-    let name = sanitizeSheetName(sheet.name) || `Sheet${i + 1}`;
-    let unique = name, n = 2;
-    while (used.has(unique.toLowerCase())) unique = `${name.slice(0, 28)} ${n++}`;
-    used.add(unique.toLowerCase());
-
-    const ws = wb.addWorksheet(unique);
-    const explicitColWidths = { ...(sheet.colWidths || {}) };
-    const styles = sheet.styles || {};
-
-    (sheet.rows || []).forEach((row, r) => {
-      (row || []).forEach((val, c) => {
-        if (val === '' || val === null || val === undefined) return;
-        const cell = ws.getCell(r + 1, c + 1);
-        const sVal = String(val);
-        if (sVal.startsWith('=')) {
-          cell.value = { formula: sVal.slice(1) };
-        } else {
-          cell.value = coerceValue(val);
-        }
-        applyModelCellStyle(cell, styles[`${r},${c}`]);
-      });
-    });
-
-    Object.keys(styles).forEach((key) => {
-      const [rStr, cStr] = key.split(',');
-      const r = parseInt(rStr, 10);
-      const c = parseInt(cStr, 10);
-      const row = (sheet.rows || [])[r];
-      const val = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
-      if (val === '' || val === null || val === undefined) {
-        applyModelCellStyle(ws.getCell(r + 1, c + 1), styles[key]);
-      }
-    });
-
-    Object.entries(sheet.rowHeights || {}).forEach(([r, px]) => {
-      const row = ws.getRow(parseInt(r, 10) + 1);
-      if (px) row.height = px * 72 / 96;
-    });
-
-    Object.entries(explicitColWidths).forEach(([c, px]) => {
-      const colNum = parseInt(c, 10) + 1;
-      if (px) ws.getColumn(colNum).width = pxToExcelWidth(px);
-    });
-  });
-  writeMargoMeta(wb, sheets);
-  return wb;
-}
-
-function coerceValue(v) {
-  const s = String(v);
-  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(s.trim())) {
-    const n = Number(s);
-    if (Number.isFinite(n) && Math.abs(n) < Number.MAX_SAFE_INTEGER) return n;
-  }
-  return s;
 }
 
 module.exports = {
@@ -1303,7 +1218,7 @@ module.exports = {
   htmlForPdfExport,
   turndownHtml: (html) => turndown.turndown(html),
   markedParse: (md) => marked.parse(md),
-  normalizeCell,
-  modelToWorkbook,
-  workbookToModel
+  normalizeCell: sheetIo.normalizeCell,
+  modelToWorkbook: sheetIo.modelToWorkbook,
+  workbookToModel: sheetIo.workbookToModel
 };

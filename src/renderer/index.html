@@ -6,12 +6,18 @@
         content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'" />
   <title>Margo</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="css/markdown.css" />
+  <link rel="stylesheet" href="css/doc.css" />
+  <link rel="stylesheet" href="css/sheet.css" />
+  <link rel="stylesheet" href="css/pdf.css" />
+  <link rel="stylesheet" href="css/slides.css" />
 </head>
 <body>
-  <!-- Titlebar -->
+  <!-- Titlebar: brand, document tabs, command search, account.
+       The window controls are drawn by the OS overlay on the right. -->
   <header class="titlebar" id="titlebar">
     <div class="titlebar-left">
-      <button class="brand-btn" id="btn-home" title="Home">
+      <button type="button" class="brand-btn" id="btn-home" title="Home" aria-label="Home">
         <img class="brand-mascot" id="brand-mascot" src="../../assets/icon.png" width="20" height="20" alt="" />
         <span class="brand-name">Margo</span>
       </button>
@@ -22,7 +28,15 @@
         <span class="doc-badge" id="doc-badge">MD</span>
       </div>
     </div>
+    <div id="tab-bar" class="tab-bar hidden" role="tablist" aria-label="Open documents"></div>
+    <button type="button" class="tab-new hidden" id="btn-tab-new" title="New document (Ctrl+N)" aria-label="New document"></button>
+    <div class="titlebar-drag"></div>
     <div class="titlebar-right">
+      <button type="button" class="cmd-trigger" id="btn-command" title="Search commands and files (Ctrl+K)">
+        <span class="cmd-trigger-icon" id="cmd-trigger-icon"></span>
+        <span class="cmd-trigger-label">Search or run a command</span>
+        <kbd class="cmd-trigger-kbd">Ctrl K</kbd>
+      </button>
       <button type="button" class="account-btn" id="btn-account" title="Google account" aria-label="Google account">
         <span class="account-avatar" id="account-avatar"></span>
       </button>
@@ -33,48 +47,54 @@
 
   <!-- Menu bar -->
   <nav id="menubar" class="menubar" aria-label="Application menu"></nav>
-  <div id="tab-bar" class="tab-bar hidden"></div>
 
   <div class="shell" id="shell">
     <!-- hover strip that reveals the sidebar when it is unpinned -->
     <div class="side-hotzone" id="side-hotzone"></div>
     <!-- Sidebar library -->
-    <aside class="sidebar" id="sidebar">
-      <div class="side-actions">
-        <div class="side-actions-row">
-          <button class="btn primary side-open" id="btn-open-file">Open file…</button>
-          <button class="icon-btn side-pin" id="btn-pin-sidebar" title="Pin sidebar"></button>
+    <aside class="sidebar" id="sidebar" aria-label="Library">
+      <div class="side-top">
+        <div class="side-title-row">
+          <span class="side-title">Library</span>
+          <button type="button" class="icon-btn side-pin" id="btn-pin-sidebar" title="Pin sidebar"></button>
         </div>
-        <div class="side-new-row">
-          <button class="side-new" data-new="md" title="New Markdown note">
-            <span class="side-new-icon icon-md"></span><span class="side-new-label">Markdown</span>
-          </button>
-          <button class="side-new" data-new="doc" title="New Word document">
-            <span class="side-new-icon icon-doc"></span><span class="side-new-label">Document</span>
-          </button>
-          <button class="side-new" data-new="sheet" title="New spreadsheet">
-            <span class="side-new-icon icon-sheet"></span><span class="side-new-label">Sheet</span>
-          </button>
-          <button class="side-new" data-new="pdf" title="New PDF document">
-            <span class="side-new-icon icon-pdf"></span><span class="side-new-label">PDF</span>
-          </button>
+        <button type="button" class="btn primary side-open" id="btn-open-file">
+          <span class="btn-icon" data-icon="folderOpen"></span><span>Open file…</span>
+        </button>
+        <div class="side-new-row" id="side-new-row"></div>
+      </div>
+
+      <div class="side-search">
+        <label class="search-field">
+          <span class="search-field-icon" data-icon="search"></span>
+          <input type="search" id="side-search" placeholder="Filter files" autocomplete="off" spellcheck="false" aria-label="Filter recent files" />
+        </label>
+        <button type="button" class="icon-btn side-group-btn" id="btn-side-group" title="Group by type" aria-pressed="false"></button>
+      </div>
+
+      <div class="side-scroll" id="side-scroll">
+        <div class="side-section hidden" id="side-pinned-section">
+          <div class="side-head"><span>Pinned</span></div>
+          <div class="side-list" id="side-pinned"></div>
+        </div>
+        <div class="side-section">
+          <div class="side-head">
+            <span>Recent</span>
+            <button type="button" class="link-btn hidden" id="btn-clear-recents">Clear</button>
+          </div>
+          <div class="side-list" id="recents-grid">
+            <div class="side-empty" id="side-empty">Files you open or save appear here.</div>
+          </div>
         </div>
       </div>
 
-      <div class="side-section">
-        <div class="side-head">
-          <span>Recents</span>
-          <button class="link-btn hidden" id="btn-clear-recents">Clear</button>
-        </div>
-        <div class="side-list" id="recents-grid">
-          <div class="side-empty" id="side-empty">Files you open or save appear here, with a preview of their first page.</div>
-        </div>
-      </div>
       <div class="side-footer">
-        <button type="button" class="side-settings" id="btn-sidebar-settings" title="Settings">
+        <button type="button" class="side-settings" id="btn-sidebar-settings" title="Settings (Ctrl+,)">
           <span class="side-settings-icon" id="side-settings-icon"></span>
           <span>Settings</span>
         </button>
+        <button type="button" class="icon-btn" id="btn-side-shortcuts" title="Keyboard shortcuts (Ctrl+/)" aria-label="Keyboard shortcuts"></button>
+        <button type="button" class="icon-btn" id="btn-side-theme" title="Switch theme" aria-label="Switch theme"></button>
       </div>
       <div class="side-resize" id="side-resize" title="Drag to resize"></div>
     </aside>
@@ -84,35 +104,51 @@
       <section class="view view-home" id="view-landing">
         <div class="home-hub">
           <header class="home-hero">
-            <img class="home-mascot" id="hero-mascot" src="../../assets/icon.png" width="56" height="56" alt="" />
-            <p class="home-eyebrow">Margo</p>
-            <h1 class="home-title">A quiet place for your work.</h1>
-            <p class="home-tagline">Open a file, start something new, or pick up where you left off.</p>
-            <p class="home-exts"><span>.md</span><span>.docx</span><span>.xlsx</span><span>.csv</span><span>.pdf</span></p>
-          </header>
-
-          <div class="home-create">
-            <button type="button" class="btn primary home-open" id="btn-home-open">Open file…</button>
-            <div class="home-new-row">
-              <button type="button" class="home-new" data-new="md" title="New Markdown note">
-                <span class="home-new-icon icon-md"></span><span class="home-new-label">Markdown</span>
+            <div class="home-hero-text">
+              <p class="home-eyebrow">
+                <img class="home-mascot" id="hero-mascot" src="../../assets/icon.png" width="22" height="22" alt="" />
+                <span id="home-date">Margo</span>
+              </p>
+              <h1 class="home-title" id="home-greeting">Welcome back</h1>
+              <p class="home-tagline">Start something new, or pick up where you left off.</p>
+            </div>
+            <div class="home-hero-actions">
+              <button type="button" class="btn ghost home-open" id="btn-home-open">
+                <span class="btn-icon" data-icon="folderOpen"></span><span>Open file…</span>
               </button>
-              <button type="button" class="home-new" data-new="doc" title="New Word document">
-                <span class="home-new-icon icon-doc"></span><span class="home-new-label">Document</span>
-              </button>
-              <button type="button" class="home-new" data-new="sheet" title="New spreadsheet">
-                <span class="home-new-icon icon-sheet"></span><span class="home-new-label">Sheet</span>
-              </button>
-              <button type="button" class="home-new" data-new="pdf" title="New PDF document">
-                <span class="home-new-icon icon-pdf"></span><span class="home-new-label">PDF</span>
+              <button type="button" class="btn ghost home-palette" id="btn-home-palette" title="Command palette (Ctrl+K)">
+                <span class="btn-icon" data-icon="command"></span><span>Commands</span><kbd>Ctrl K</kbd>
               </button>
             </div>
-          </div>
+          </header>
 
-          <section class="home-library" aria-label="Recent documents">
+          <section class="home-section home-create" aria-label="Create">
+            <div class="home-section-head">
+              <h2 class="home-section-title">Start something new</h2>
+            </div>
+            <div class="home-new-row" id="home-new-row"></div>
+            <div class="home-section-head home-section-head-sub">
+              <h3 class="home-section-sub">Templates</h3>
+            </div>
+            <div class="home-templates" id="home-templates"></div>
+          </section>
+
+          <section class="home-section home-library" aria-label="Recent documents">
             <div class="home-library-head">
               <h2 class="home-library-title">Recent</h2>
-              <button type="button" class="link-btn hidden" id="btn-clear-home-recents">Clear</button>
+              <div class="home-library-tools">
+                <label class="search-field home-search">
+                  <span class="search-field-icon" data-icon="search"></span>
+                  <input type="search" id="home-search" placeholder="Search recent files" autocomplete="off" spellcheck="false" aria-label="Search recent files" />
+                </label>
+                <div class="segmented home-filter" id="home-filter" role="tablist" aria-label="Filter by type"></div>
+                <button type="button" class="link-btn hidden" id="btn-clear-home-recents">Clear</button>
+              </div>
+            </div>
+            <div class="home-pinned-wrap hidden" id="home-pinned-wrap">
+              <h3 class="home-subhead">Pinned</h3>
+              <div class="home-tiles" id="home-pinned"></div>
+              <h3 class="home-subhead">All recent</h3>
             </div>
             <div class="home-tiles" id="home-tiles">
               <p class="home-tiles-empty" id="home-tiles-empty">Files you open or save appear here, with a preview of their first page.</p>
@@ -129,14 +165,40 @@
 
   <!-- Modal -->
   <div class="modal-backdrop hidden" id="modal-backdrop">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <h3 class="modal-title" id="modal-title"></h3>
       <div class="modal-body" id="modal-body"></div>
       <div class="modal-actions" id="modal-actions"></div>
     </div>
   </div>
 
-  <div class="toast-wrap" id="toast-wrap"></div>
+  <!-- Command palette -->
+  <div class="palette-backdrop hidden" id="palette-backdrop">
+    <div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="palette-input-row">
+        <span class="palette-input-icon" data-icon="search"></span>
+        <input type="text" id="palette-input" class="palette-input" placeholder="Search commands, files and templates…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" />
+        <kbd class="palette-esc">Esc</kbd>
+      </div>
+      <div class="palette-list" id="palette-list" role="listbox"></div>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
+        <span><kbd>Enter</kbd> to run</span>
+        <span><kbd>Esc</kbd> to close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shown while files are dragged over the window -->
+  <div class="drop-overlay hidden" id="drop-overlay" aria-hidden="true">
+    <div class="drop-overlay-card">
+      <span class="drop-overlay-icon" data-icon="open"></span>
+      <strong>Drop to open</strong>
+      <span>Markdown, Word, Excel, CSV and PDF files</span>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toast-wrap" role="status" aria-live="polite"></div>
 
   <script src="vendor/purify.min.js"></script>
   <script src="vendor/marked.min.js"></script>
@@ -152,6 +214,8 @@
   <script src="editors/richtext.js"></script>
   <script src="editors/sheet.js"></script>
   <script src="editors/pdfview.js"></script>
+  <script src="../main/slides-core.js"></script>
+  <script src="editors/slides.js"></script>
   <script src="app.js"></script>
   <script src="smoke-ui.js"></script>
 </body>

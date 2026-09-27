@@ -1,11 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const { app, ipcMain, clipboard } = require('electron');
+const { atomicWrite } = require('../files');
 
 const NOT_CONFIGURED = 'Google sign-in is not configured. Add a Desktop OAuth client ID (see README).';
 
+/* Map keys fold case only where the file system does. Folding everywhere
+   meant that on Linux the "existing local copy" handed back for a Drive file
+   was the lower-cased key - a path that does not exist - and the next Open
+   from Drive wrote the download into a freshly created lower-case folder. */
+const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin';
 function normPath(p) {
-  try { return path.resolve(String(p)).toLowerCase(); } catch { return String(p || '').toLowerCase(); }
+  let r;
+  try { r = path.resolve(String(p)); } catch { r = String(p || ''); }
+  return CASE_INSENSITIVE ? r.toLowerCase() : r;
 }
 
 function initialsOf(name, email) {
@@ -27,13 +35,23 @@ function readMap(userData) {
   } catch { return {}; }
 }
 function writeMap(userData, obj) {
-  try { fs.writeFileSync(mapPath(userData), JSON.stringify(obj, null, 2)); } catch {}
+  const dest = mapPath(userData);
+  const tmp = dest + '.' + process.pid + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, dest);
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
 }
 
+/* Entries remember the path as it was written (`path`); older entries only
+   have the key, which is the real path everywhere but on a case-folding
+   platform, where the file system does not mind. */
 function pathForFileId(maps, fileId) {
   if (!fileId) return null;
   for (const [p, v] of Object.entries(maps)) {
-    if (v && v.fileId === fileId) return p;
+    if (v && v.fileId === fileId) return (typeof v.path === 'string' && v.path) || p;
   }
   return null;
 }
@@ -47,7 +65,8 @@ function remapPath(userData, fromPath, toPath, name) {
     if (oldKey !== newKey && maps[oldKey]) {
       maps[newKey] = {
         fileId: maps[oldKey].fileId,
-        name: name || maps[oldKey].name
+        name: name || maps[oldKey].name,
+        path: path.resolve(toPath)
       };
       delete maps[oldKey];
       writeMap(userData, maps);
@@ -89,8 +108,17 @@ function stubStatus() {
   return { signedIn: false, configured: false, email: '', name: '', pictureDataUrl: null, initials: 'G' };
 }
 
-function attach({ disabled, userData }) {
+const EMAIL_RE = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
+
+function attach({ disabled, userData, access, ownWrite }) {
   const getUserData = typeof userData === 'function' ? userData : () => userData;
+  /* Paths come from the renderer, so they go through the same check as every
+     other file IPC: Share and the save-time push read the file and upload it,
+     and without this any page script could ship any file of the author's to
+     their Drive and share it out. */
+  const checkPath = (p, what) => (access ? access.check(p, what) : path.resolve(String(p)));
+  const allowed = (p) => (access ? access.isAllowed(p) : true);
+  const guardWrite = ownWrite || ((_p, fn) => fn());
   let pictureCache = null;
   let signInLock = null;
 
@@ -142,13 +170,34 @@ function attach({ disabled, userData }) {
     return statusFromStore(store, cfg);
   }
 
+  /* A revoked or expired refresh token signs the author out, so the UI stops
+     claiming a Drive connection that cannot work. */
+  async function tokenFor(cfg, store) {
+    try {
+      return await oauth.accessToken(cfg, store);
+    } catch (err) {
+      if (err && err.code === 'SIGNIN_EXPIRED') {
+        oauth.clearStore(getUserData());
+        pictureCache = null;
+        pictureAttempted = false;
+      }
+      throw err;
+    }
+  }
+
   async function withToken() {
     const cfg = oauth.loadClientConfig();
     if (!cfg) throw new Error(NOT_CONFIGURED);
     const store = oauth.readStore(getUserData());
     if (!store) throw new Error('Sign in with Google first.');
-    const token = await oauth.accessToken(cfg, store);
+    const token = await tokenFor(cfg, store);
     return { cfg, store, token };
+  }
+
+  function failure(err) {
+    const out = { ok: false, error: (err && err.message) || String(err) };
+    if (err && err.code === 'SIGNIN_EXPIRED') out.signedOut = true;
+    return out;
   }
 
   async function persistFolder(store, folderId) {
@@ -163,7 +212,11 @@ function attach({ disabled, userData }) {
   ipcMain.handle('google:signIn', async () => {
     const cfg = oauth.loadClientConfig();
     if (!cfg) return { ok: false, error: NOT_CONFIGURED };
-    if (signInLock) return signInLock;
+    if (signInLock) {
+      // Already waiting on the browser: bring the consent page back.
+      oauth.reopenPendingSignIn();
+      return signInLock;
+    }
     signInLock = (async () => {
       try {
         const store = await oauth.signInWithBrowser(cfg);
@@ -181,6 +234,7 @@ function attach({ disabled, userData }) {
   });
 
   ipcMain.handle('google:signOut', async () => {
+    oauth.cancelSignIn();
     oauth.clearStore(getUserData());
     pictureCache = null;
     pictureAttempted = false;
@@ -189,13 +243,14 @@ function attach({ disabled, userData }) {
 
   ipcMain.handle('google:share', async (_e, req) => {
     try {
-      const filePath = req && req.path;
-      const name = (req && req.name) || path.basename(filePath || 'Untitled');
-      if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'Save the file locally first.' };
+      if (!req || !req.path) return { ok: false, error: 'Save the file locally first.' };
+      const filePath = checkPath(req.path, 'share');
+      const name = safeFileName((typeof req.name === 'string' && req.name) || path.basename(filePath));
+      if (!fs.existsSync(filePath)) return { ok: false, error: 'Save the file locally first.' };
       let { store, token } = await withToken();
       const folderId = await drive.ensureFolder(token, store.folderId);
       store = await persistFolder(store, folderId);
-      const buf = fs.readFileSync(filePath);
+      const buf = await fs.promises.readFile(filePath);
       const mime = drive.mimeOf(filePath);
       const maps = readMap(getUserData());
       const key = normPath(filePath);
@@ -211,7 +266,7 @@ function attach({ disabled, userData }) {
       else {
         meta = await drive.createFile(token, { name, mime, buf, folderId });
         fileId = meta.id;
-        maps[key] = { fileId, name };
+        maps[key] = { fileId, name, path: filePath };
         writeMap(getUserData(), maps);
       }
       const people = await drive.listPermissions(token, fileId);
@@ -223,52 +278,55 @@ function attach({ disabled, userData }) {
         people
       };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:addPerson', async (_e, req) => {
     try {
-      const { token } = await withToken();
       const email = String((req && req.email) || '').trim();
-      if (!email || !email.includes('@')) return { ok: false, error: 'Enter a Google email address.' };
-      if (!req.fileId) return { ok: false, error: 'Missing Drive file.' };
+      if (!email || email.length > 320 || !EMAIL_RE.test(email)) return { ok: false, error: 'Enter a Google email address.' };
+      if (!drive.isDriveId(req.fileId)) return { ok: false, error: 'Missing Drive file.' };
+      const { token } = await withToken();
       await drive.addPermission(token, req.fileId, email, req.role);
       const people = await drive.listPermissions(token, req.fileId);
       return { ok: true, people };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:setRole', async (_e, req) => {
     try {
+      if (!req || !drive.isDriveId(req.fileId) || !drive.isDriveId(req.permissionId)) return { ok: false, error: 'Missing permission.' };
       const { token } = await withToken();
-      if (!req.fileId || !req.permissionId) return { ok: false, error: 'Missing permission.' };
       await drive.setPermissionRole(token, req.fileId, req.permissionId, req.role);
       const people = await drive.listPermissions(token, req.fileId);
       return { ok: true, people };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:removePerson', async (_e, req) => {
     try {
+      if (!req || !drive.isDriveId(req.fileId) || !drive.isDriveId(req.permissionId)) return { ok: false, error: 'Missing permission.' };
       const { token } = await withToken();
-      if (!req.fileId || !req.permissionId) return { ok: false, error: 'Missing permission.' };
       await drive.removePermission(token, req.fileId, req.permissionId);
       const people = await drive.listPermissions(token, req.fileId);
       return { ok: true, people };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:copyLink', async (_e, link) => {
     const url = String(link || '').trim();
     if (!url) return { ok: false, error: 'No link yet.' };
-    clipboard.writeText(url);
+    let u = null;
+    try { u = new URL(url); } catch {}
+    if (!u || u.protocol !== 'https:') return { ok: false, error: 'That is not a Drive link.' };
+    clipboard.writeText(u.href);
     return { ok: true };
   });
 
@@ -289,36 +347,46 @@ function attach({ disabled, userData }) {
         }));
       return { ok: true, files };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:open', async (_e, req) => {
     try {
       const fileId = req && req.fileId;
-      const name = (req && req.name) || 'Untitled';
-      if (!fileId) return { ok: false, error: 'Missing Drive file.' };
-      if (!drive.isOpenableName(name)) return { ok: false, error: 'Margo cannot open that file type.' };
+      if (!drive.isDriveId(fileId)) return { ok: false, error: 'Missing Drive file.' };
       const { token } = await withToken();
+      /* The name comes from Drive, not the renderer: it decides where the
+         copy is written and what Margo opens it as. */
+      const meta = await drive.getFile(token, fileId);
+      if (!meta || meta.trashed) return { ok: false, error: 'That file is no longer on Drive.' };
+      const name = meta.name || (req && req.name) || 'Untitled';
+      if (!drive.isOpenableName(name)) return { ok: false, error: 'Margo cannot open that file type.' };
       const buf = await drive.downloadFile(token, fileId);
       const dest = destForDownload(getUserData(), fileId, name);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, buf);
+      // Atomic, so a dropped download cannot leave half a document behind in
+      // place of the local copy.
+      await guardWrite(dest, () => atomicWrite(dest, (tmp) => fs.promises.writeFile(tmp, buf)));
       const maps = readMap(getUserData());
-      maps[normPath(dest)] = { fileId, name: path.basename(dest) };
+      maps[normPath(dest)] = { fileId, name: path.basename(dest), path: dest };
       writeMap(getUserData(), maps);
-      return { ok: true, path: dest };
+      const granted = access ? access.grant(dest) : dest;
+      return { ok: true, path: granted || dest };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 
   ipcMain.handle('google:push', async (_e, req) => {
     try {
-      const filePath = req && req.path;
-      const name = (req && req.name) || path.basename(filePath || 'Untitled');
-      if (req && req.fromPath && filePath) remapPath(getUserData(), req.fromPath, filePath, name);
-      if (!filePath || !fs.existsSync(filePath)) return { ok: true, skipped: true };
+      if (!req || typeof req.path !== 'string' || !allowed(req.path)) return { ok: true, skipped: true };
+      const filePath = checkPath(req.path, 'share');
+      const name = safeFileName((typeof req.name === 'string' && req.name) || path.basename(filePath));
+      // Carrying a Drive link over to a new path is only for a Save As of a
+      // file the author had open - never a way to point it at another file.
+      if (typeof req.fromPath === 'string' && allowed(req.fromPath)) remapPath(getUserData(), req.fromPath, filePath, name);
+      if (!fs.existsSync(filePath)) return { ok: true, skipped: true };
       const cfg = oauth.loadClientConfig();
       const store = oauth.readStore(getUserData());
       if (!cfg || !store) return { ok: true, skipped: true };
@@ -326,7 +394,7 @@ function attach({ disabled, userData }) {
       const key = normPath(filePath);
       const fileId = maps[key] && maps[key].fileId;
       if (!fileId) return { ok: true, skipped: true };
-      const token = await oauth.accessToken(cfg, store);
+      const token = await tokenFor(cfg, store);
       let existing = null;
       try {
         existing = await drive.getFile(token, fileId);
@@ -343,16 +411,16 @@ function attach({ disabled, userData }) {
         writeMap(getUserData(), maps);
         return { ok: true, skipped: true };
       }
-      const buf = fs.readFileSync(filePath);
+      const buf = await fs.promises.readFile(filePath);
       const mime = drive.mimeOf(filePath);
       await drive.updateFile(token, fileId, { name, mime, buf });
-      maps[key] = { fileId, name };
+      maps[key] = { fileId, name, path: filePath };
       writeMap(getUserData(), maps);
       return { ok: true, pushed: true };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      return failure(err);
     }
   });
 }
 
-module.exports = { attach };
+module.exports = { attach, normPath, pathForFileId, safeFileName };
