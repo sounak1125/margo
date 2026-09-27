@@ -192,11 +192,11 @@ function fileTypeSvg(kind) {
 }
 
 const FILE_KINDS = [
-  { name: 'md', aliases: ['md', 'markdown', 'txt'] },
-  { name: 'doc', aliases: ['docx'] },
-  { name: 'sheet', aliases: ['xlsx', 'csv'] },
-  { name: 'pdf', aliases: ['pdf'] },
-  { name: 'slides', aliases: ['pptx'] }
+  { name: 'md' },
+  { name: 'doc' },
+  { name: 'sheet' },
+  { name: 'pdf' },
+  { name: 'slides' }
 ];
 
 (async () => {
@@ -233,11 +233,6 @@ const FILE_KINDS = [
     fs.writeFileSync(path.join(fileIconsDir, `${k.name}.ico`), ico);
     // macOS document icons (electron-builder swaps .ico for .icns there).
     fs.writeFileSync(path.join(fileIconsDir, `${k.name}.icns`), await buildIcns((size) => (size <= 512 ? renderSvgPng(svg, size) : null)));
-    // electron-builder also looks for `${ext}.ico` in buildResources
-    for (const alias of k.aliases || []) {
-      fs.writeFileSync(path.join(assets, `${alias}.ico`), ico);
-      fs.writeFileSync(path.join(assets, `${alias}.png`), renderSvgPng(svg, 256));
-    }
     console.log(`file icon written: file-icons/${k.name}.ico`);
   }
 
