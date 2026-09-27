@@ -592,16 +592,10 @@
     refreshSaveState(t);
     scheduleDraft(t);
   }
-  function markDirty() {
-    markTabDirty(findTab(state.activeTabId));
-  }
   function setTabStatus(t, left, kind) {
     if (!t || !t.status) return;
     t.status.setLeft(left || '');
     if (kind !== undefined) t.status.setKind(kind || '');
-  }
-  function setStatus(left, kind) {
-    setTabStatus(findTab(state.activeTabId), left, kind);
   }
   function timeShort(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
@@ -1807,9 +1801,6 @@
       if (url) applyThumbToLibrary(doc.path, url);
     } catch {}
   }
-  async function refreshLibraryThumb(data) {
-    return refreshLibraryThumbFor(state.doc, data);
-  }
   /* Bound to the tab that asked: the timer used to read whichever document
      was in front when it fired, which after a quick tab switch was another
      file's contents under this file's thumbnail. */
@@ -2351,10 +2342,6 @@
     wrap.appendChild(star);
     wrap.appendChild(rm);
     host.appendChild(wrap);
-  }
-  /* kept for callers that only want the remove control */
-  function attachRecentRemove(el, r) {
-    attachRecentActions(el, r, el.classList.contains('home-tile-cover'));
   }
 
   let lastRecents = [];

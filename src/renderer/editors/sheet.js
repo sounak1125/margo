@@ -5691,7 +5691,6 @@
       return { zone: 'cell', r: rowAtY(y), c: colAtX(x), x, y };
     }
 
-    let dragState = null;
     let autoScrollTimer = 0;
     function stopAutoScroll() { if (autoScrollTimer) { clearInterval(autoScrollTimer); autoScrollTimer = 0; } }
     function beginDrag(onMove, onUp) {

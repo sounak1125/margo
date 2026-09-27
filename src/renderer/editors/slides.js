@@ -258,7 +258,6 @@
     let editingId = null;
     let k = 1;
     let zoomMode = 'fit';
-    let op = null;               // pointer operation in flight
     let hostEl = null;
     let notesOpen = lsGet(NOTES_KEY, true);
     let inspectorOpen = lsGet(INSPECTOR_KEY, true);

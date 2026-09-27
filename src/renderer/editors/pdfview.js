@@ -173,7 +173,7 @@
   }
 
   function create(ctx) {
-    let host, wrap, scroll, thumbsEl, thumbsList, pdf = null, bytes = null;
+    let host, wrap, scroll, thumbsList, pdf = null, bytes = null;
     let loadedFromPath = false;
     let bytesChanged = false;
     let encrypted = false;
@@ -2823,7 +2823,6 @@
           `</div>`;
         wrap = host.querySelector('.pdf-wrap');
         scroll = host.querySelector('.pdf-scroll');
-        thumbsEl = host.querySelector('.pdf-thumbs');
         thumbsList = host.querySelector('.pdf-thumbs-list');
         scroll.addEventListener('scroll', () => { scheduleStatus(); hideBubble(); });
         scroll.addEventListener('wheel', onCtrlWheel, { passive: false });
