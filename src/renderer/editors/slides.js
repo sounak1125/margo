@@ -825,11 +825,12 @@
     }
     function pasteElements() {
       if (!clip.elements || !clip.elements.length) return false;
-      const ids = new Set(slide().elements.map((e) => e.id));
+      // Pasting where the originals (or anything identical) still sit offsets
+      // the whole group, so the copy is visible and keeps its arrangement.
+      const clash = clip.elements.some((e) => slide().elements.some((x) => x.id === e.id || (x.x === e.x && x.y === e.y && x.type === e.type)));
       const copies = clip.elements.map((e) => {
         const c = freshIds(e);
-        // Pasting onto the slide it came from offsets it so it is visible.
-        if (ids.has(e.id) || slide().elements.some((x) => x.x === e.x && x.y === e.y && x.type === e.type)) { c.x += 16; c.y += 16; }
+        if (clash) { c.x += 16; c.y += 16; }
         return c;
       });
       clip.elements = copies.map((c) => C.clone(c));
@@ -1491,11 +1492,10 @@
       [t.titleFont, t.bodyFont].forEach((f) => { if (f && !fams.includes(f)) fams.unshift(f); });
       E.fontSel.innerHTML = '';
       const og1 = document.createElement('optgroup');
-      og1.label = 'Theme fonts';
+      og1.label = t.titleFont === t.bodyFont ? 'Theme font' : 'Theme fonts (headings, body)';
       Array.from(new Set([t.titleFont, t.bodyFont])).forEach((f) => {
         const o = document.createElement('option');
-        o.value = f; o.textContent = f + (f === t.titleFont ? ' (Headings)' : ' (Body)');
-        if (t.titleFont === t.bodyFont) o.textContent = f + ' (Theme)';
+        o.value = f; o.textContent = f;
         og1.appendChild(o);
       });
       const og2 = document.createElement('optgroup');
@@ -1528,6 +1528,7 @@
 
     function syncToolbar() {
       if (!E.fontSel) return;
+      if (E.fontThemeId !== deck.theme) { E.fontThemeId = deck.theme; fillFontSelect(); }
       const texts = textTargets();
       const textOn = !!editingId || texts.length > 0;
       ctx.toolbar.querySelectorAll('.sl-text-group button, .sl-text-group select').forEach((b) => { b.disabled = !textOn; });
@@ -1659,7 +1660,10 @@
       const b = h('button', 'sl-swatch-btn');
       b.type = 'button';
       const resolved = C.resolveColor(deck, value, slide());
-      b.innerHTML = `<span class="sl-swatch${resolved ? '' : ' none'}" style="${resolved ? 'background:' + resolved : ''}"></span><span class="sl-swatch-label">${resolved ? (C.normHex(value) ? resolved.toUpperCase() : 'Theme ' + value) : (opts.noneLabel || 'None')}</span>`;
+      // "Theme" choices show the colour the theme actually gives them.
+      const shown = resolved || opts.themeColor || null;
+      const label = resolved ? (C.normHex(value) ? resolved.toUpperCase() : 'Theme ' + value) : (opts.noneLabel || 'None');
+      b.innerHTML = `<span class="sl-swatch${shown ? '' : ' none'}" style="${shown ? 'background:' + shown : ''}"></span><span class="sl-swatch-label">${C.escapeHtml(label)}</span>`;
       b.title = opts.title;
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => {
@@ -1751,7 +1755,7 @@
       const sec2 = h('section', 'sl-ins-sec');
       secHead(sec2, 'Background');
       const bg = C.slideBackground(deck, s);
-      row(sec2, 'Colour', colorControl(s.background && s.background.color ? s.background.color : null, { title: 'Background colour', allowNone: true, noneLabel: 'Theme' }, (hex) => {
+      row(sec2, 'Colour', colorControl(s.background && s.background.color ? s.background.color : null, { title: 'Background colour', allowNone: true, noneLabel: 'Theme', themeColor: s.background ? null : bg.color }, (hex) => {
         s.background = hex ? { color: hex } : null;
         commit();
       }));
@@ -1797,7 +1801,7 @@
       const dup = h('button', 'btn ghost sl-btn-sm', 'Duplicate');
       dup.type = 'button';
       dup.addEventListener('click', () => duplicateSlide());
-      const del = h('button', 'btn ghost sl-btn-sm danger', 'Delete');
+      const del = h('button', 'btn ghost sl-btn-sm sl-danger', 'Delete');
       del.type = 'button';
       del.addEventListener('click', () => deleteSlide());
       btns.append(dup, del);
@@ -1860,7 +1864,7 @@
         const sec = h('section', 'sl-ins-sec');
         secHead(sec, 'Text');
         row(sec, 'Vertical', segmented([['top', 'Top', IC.vTop], ['middle', 'Middle', IC.vMid], ['bottom', 'Bottom', IC.vBottom]], el.valign, (v) => setBoxProp({ valign: v })));
-        row(sec, 'Colour', colorControl(el.color, { title: 'Text colour', allowNone: true, noneLabel: 'Theme' }, (hex) => {
+        row(sec, 'Colour', colorControl(el.color, { title: 'Text colour', allowNone: true, noneLabel: 'Theme', themeColor: C.textDefaults(deck, slide(), Object.assign({}, el, { color: null })).color }, (hex) => {
           el.color = hex; eachRun(el, (r) => { delete r.color; });
           if (editingId) { renderStageKeepEdit(); onTextInput(); renderInspector(); } else commit();
         }));
@@ -1932,7 +1936,7 @@
       const dup = h('button', 'btn ghost sl-btn-sm', 'Duplicate');
       dup.type = 'button';
       dup.addEventListener('click', duplicateSelected);
-      const del = h('button', 'btn ghost sl-btn-sm danger', 'Delete');
+      const del = h('button', 'btn ghost sl-btn-sm sl-danger', 'Delete');
       del.type = 'button';
       del.addEventListener('click', deleteSelected);
       r.append(dup, del);
@@ -2106,8 +2110,8 @@
       const targets = snapTargets(new Set([el.id]));
       const keepAspectDefault = el.type === 'image' && !el.crop && el.fit !== 'cover';
       op = 'resize';
-      const node = elNode(el.id);
       trackPointer(e, (ev) => {
+        const node = elNode(el.id);
         const p = toSlide(ev);
         const gx = [], gy = [];
         if (which === 'rot') {
@@ -2389,9 +2393,22 @@
       if (sel.length === 1 && key.length === 1 && !e.altKey) {
         const el = selected()[0];
         if (el.type === 'text') {
+          // The key was aimed at the canvas; carry it into the box.
+          e.preventDefault();
           startEdit(el.id, {});
+          document.execCommand('insertText', false, key);
+          onTextInput();
         }
       }
+    }
+    /* Listening in the capture phase on window puts the editor ahead of the
+       app-wide shortcuts, so a key it handles (Ctrl+E centres text here
+       rather than exporting) goes no further. */
+    function onKeyDownCapture(e) {
+      if (e.key === 'Escape' && document.querySelector('.mc-pop, .sl-pop, .menu-drop')) return;
+      const before = e.defaultPrevented;
+      onKeyDown(e);
+      if (!before && e.defaultPrevented) e.stopPropagation();
     }
     let pasteArmed = false;
     function onPaste(e) {
@@ -2550,7 +2567,6 @@
         const key = e.key;
         if (key === 'Escape') { e.preventDefault(); exitShow(); return; }
         if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'n', 'N', 'Enter'].includes(key) && !(key === 'Enter' && show.typed)) {
-          if (key === 'n' || key === 'N') { if (!e.shiftKey && key === 'N') {} }
           e.preventDefault();
           if (key === 'n') { go(1); return; }
           if (key === 'N') { show.notes = !show.notes; paint(false); return; }
@@ -2717,7 +2733,7 @@
       sel = [];
       buildToolbar();
       buildDom(host);
-      document.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keydown', onKeyDownCapture, true);
       document.addEventListener('paste', onPaste);
       document.addEventListener('copy', onCopyCut);
       document.addEventListener('cut', onCopyCut);
@@ -2735,7 +2751,7 @@
       closePop();
       clearTimeout(thumbTimer);
       clearTimeout(textRecordTimer);
-      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDownCapture, true);
       document.removeEventListener('paste', onPaste);
       document.removeEventListener('copy', onCopyCut);
       document.removeEventListener('cut', onCopyCut);
@@ -2863,6 +2879,7 @@
   }
 
   window.MargoEditors = window.MargoEditors || {};
+  create.blankDoc = () => ({ kind: 'slides', name: 'Untitled.pptx', path: null, deck: C.newDeck('margo') });
   window.MargoEditors.slides = create;
   window.MargoSlides = { thumbDataUrl, newDeck: (theme) => C.newDeck(theme) };
 })();

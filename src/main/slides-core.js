@@ -136,12 +136,15 @@
     }
     return normHex(t[value]) || null;
   }
+  /* A CSS font-family list. Single quotes and no characters that need
+     escaping, so the same string works in a style="" attribute of generated
+     HTML and in element.setAttribute('style', ...). */
   function fontCss(name) {
-    const n = String(name || 'Segoe UI').replace(/["\\]/g, '');
-    const fallback = SERIF.test(n) ? 'Georgia, "Times New Roman", serif'
-      : MONO.test(n) ? 'Consolas, "Courier New", monospace'
-        : 'system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-    return `"${n}", ${fallback}`;
+    const n = String(name || 'Segoe UI').replace(/["'\\<>&;{}]/g, '').trim() || 'Segoe UI';
+    const fallback = SERIF.test(n) ? "Georgia, 'Times New Roman', serif"
+      : MONO.test(n) ? "Consolas, 'Courier New', monospace"
+        : "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    return `'${n}', ${fallback}`;
   }
 
   /* ---------------- effective text styles ---------------- */
@@ -247,6 +250,16 @@
   }
 
   /* ---------------- normalization ---------------- */
+  /* Pictures are only ever embedded data. A file:// or http(s) URL arriving
+     in a document would make the canvas, a PDF export or a thumbnail reach
+     out to the disk or the network on the author's behalf. '@xml' is the
+     .pptx reader's placeholder for a picture it restores from the slide XML. */
+  function safeImageSrc(v) {
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (s === '@xml') return s;
+    return /^data:image\/(png|jpe?g|gif|bmp|webp|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(s) ? s : '';
+  }
+
   function normRun(r) {
     const out = { text: String((r && r.text) == null ? '' : r.text) };
     if (r && r.b != null) out.b = !!r.b;
@@ -295,7 +308,7 @@
       const crop = e.crop && typeof e.crop === 'object'
         ? { l: num(e.crop.l, 0), t: num(e.crop.t, 0), r: num(e.crop.r, 0), b: num(e.crop.b, 0) } : null;
       return Object.assign(imageEl(base), {
-        src: typeof e.src === 'string' ? e.src : '',
+        src: safeImageSrc(e.src),
         nw: num(e.nw, 0), nh: num(e.nh, 0),
         fit: e.fit === 'cover' ? 'cover' : 'stretch', crop
       });
@@ -321,7 +334,7 @@
       if (!s || typeof s !== 'object') return;
       let background = null;
       if (s.background && normHex(s.background.color)) background = { color: normHex(s.background.color) };
-      else if (s.background && typeof s.background.image === 'string' && s.background.image) background = { image: s.background.image };
+      else if (s.background && safeImageSrc(s.background.image)) background = { image: safeImageSrc(s.background.image) };
       deck.slides.push({
         id: typeof s.id === 'string' && s.id ? s.id : uid('sl'),
         layout: typeof s.layout === 'string' ? s.layout : 'blank',
@@ -377,7 +390,7 @@
     const c = resolveColor(deck, run.color, slide);
     if (c) st.push(`color:${c}`);
     if (run.size) st.push(`font-size:${run.size}pt`);
-    if (run.font) st.push(`font-family:${escapeHtml(fontCss(run.font))}`);
+    if (run.font) st.push(`font-family:${fontCss(run.font)}`);
     const text = escapeHtml(run.text || '').replace(/\n/g, '<br>');
     if (!st.length) return text;
     return `<span style="${st.join(';')}">${text}</span>`;
@@ -418,7 +431,7 @@
   function textBoxStyle(deck, slide, el) {
     const d = textDefaults(deck, slide, el);
     const st = [
-      `font-family:${escapeHtml(fontCss(d.font))}`,
+      `font-family:${fontCss(d.font)}`,
       `font-size:${d.size}pt`,
       `color:${d.color}`,
       `font-weight:${d.bold ? 700 : 400}`,
@@ -593,7 +606,7 @@ ${SLIDE_CSS}
   return {
     DEFAULT_SIZE, PX_PER_IN, PAD_X, PAD_Y, BULLET_INDENT_PT, BULLET_CHARS,
     THEMES, THEME_TOKENS, LAYOUTS, SHAPES, ROLE_SIZE, SLIDE_CSS,
-    uid, clone, escapeHtml, normHex,
+    uid, clone, escapeHtml, normHex, safeImageSrc,
     themeOf, themeList, resolveColor, fontCss,
     textDefaults, runStyle,
     para, textEl, shapeEl, imageEl, makeSlide, newDeck, layoutElements,

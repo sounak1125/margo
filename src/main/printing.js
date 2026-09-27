@@ -94,6 +94,15 @@ function documentDefaults(kind, data) {
     if (layout.orientation === 'landscape') out.landscape = true;
     out.margins = marginsFrom(layout.marginIn) || marginsFrom(layout.margins) || out.margins;
   }
+  // A presentation prints one slide per page, the page the size of the slide.
+  const deckSize = kind === 'slides' && data && data.deck && data.deck.size;
+  if (deckSize && Number(deckSize.w) > 0 && Number(deckSize.h) > 0) {
+    const w = Number(deckSize.w) / 96;
+    const h = Number(deckSize.h) / 96;
+    out.size = { w: Math.min(w, h), h: Math.max(w, h) };
+    out.landscape = w > h;
+    out.margins = marginsFrom('none');
+  }
   return out;
 }
 
@@ -112,8 +121,10 @@ function normalizePageOptions(page, kind, data) {
   let size = base.size;
   if (typeof p.size === 'string' && PAGE_SIZES[p.size.toLowerCase()]) size = p.size.toLowerCase();
   else if (p.size && typeof p.size === 'object') {
-    const w = clampInches(p.size.width);
-    const h = clampInches(p.size.height);
+    // clampInches caps at 4 in (a margin limit); a page may be far larger.
+    const pageIn = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(48, Math.max(0, n)) : null; };
+    const w = pageIn(p.size.width);
+    const h = pageIn(p.size.height);
     if (w && h && w >= 1 && h >= 1) size = { w: Math.min(w, h), h: Math.max(w, h) };
   }
 
