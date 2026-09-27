@@ -11,7 +11,9 @@
 
   window.margo.onSmokeRun(async (cfg) => {
     const T = window.__margoTest;
-    const joinTmp = (f) => cfg.tmpDir + '\\' + f;
+    // The main process says which separator its platform uses; a hard-coded
+    // backslash wrote every artifact beside /tmp/margo-smoke on Linux/macOS.
+    const joinTmp = (f) => cfg.tmpDir + (cfg.sep || '/') + f;
     try {
       // 1. landing renders (start from a known state)
       T.showLanding();

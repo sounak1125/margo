@@ -1,8 +1,39 @@
 /* Margo — app shell: sidebar library, routing, save/open, theme, guards */
 (function () {
-  /* ---------------- icons (16px, stroke = currentColor) ---------------- */
+  /* ---------------- icons (16px, stroke = currentColor) ----------------
+     window.MargoIcons is the one icon set for the whole app: every value is an
+     inline <svg> string on a 16×16 grid, stroked in currentColor at 1.6, so it
+     takes the colour and size (CSS width/height) of wherever it is dropped.
+     Editors reuse it for their toolbars: `el.innerHTML = MargoIcons.bold`.
+
+     Keys, by group:
+       text/format   ul ol quote code codeblock link table hr alignLeft
+                     alignCenter alignRight alignJustify clear subscript
+                     superscript highlight lineSpacing caseChange indentInc
+                     indentDec bold italic underline strike textColor heading
+       edit          undo redo cut copy paste search replace
+       insert        image imageStack pageBreak symbol callout date comment
+                     commentsPanel pen signature shapes textbox
+       page/layout   columns margins orientation pageSize headerFooter header
+                     footer printLayout readView outline stats focus
+                     spellcheck
+       sheet         fx autosum chartCol chartBar chartLine chartPie filter
+                     sortAZ sortZA freeze merge wrap currency percent comma
+                     decimalInc decimalDec shading borderAll borderOuter
+                     borderNone valignTop valignMiddle valignBottom plusRow
+                     plusCol
+       files/kinds   fileMd fileDoc fileSheet filePdf fileSlides file note
+                     folderOpen open save saveAs download upload exportPdf
+                     print share
+       templates     letter resume meeting budget todo
+       shell/nav     home plus close check chevronRight chevronDown more
+                     command keyboard palette sidebar pin star starFilled
+                     clock grid list trash refresh externalLink copyPath
+                     info warning success error user logout cloud sparkle
+                     sun moon settings bell zoomIn zoomOut fit window
+                     density tabs present */
   const S = (d, extra) =>
-    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}${extra || ''}</svg>`;
+    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}${extra || ''}</svg>`;
   window.MargoIcons = {
     ul: S('<circle cx="3" cy="4" r="0.5" fill="currentColor"/><circle cx="3" cy="8" r="0.5" fill="currentColor"/><circle cx="3" cy="12" r="0.5" fill="currentColor"/><path d="M6.5 4h7M6.5 8h7M6.5 12h7"/>'),
     ol: S('<path d="M2.5 3.2 3.6 2.5v3.5M2.5 9.5h2l-2 2.8h2M7 4h6.5M7 8h6.5M7 12h6.5"/>'),
@@ -101,8 +132,69 @@
     decimalInc: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 4.5l-1 1M1 4.5h3"/>'),
     decimalDec: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 5.5l1-1M1 4.5h3"/>'),
     printLayout: S('<path d="M3.5 2h6L13 5.5V14H3.5z"/><path d="M5.5 8h5.5M5.5 10.5h5.5"/>'),
-    readView: S('<path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>')
+    readView: S('<path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>'),
+    /* text formatting */
+    bold: S('<path d="M4.5 2.5h4.2a2.8 2.8 0 0 1 0 5.6H4.5zM4.5 8.1h5a2.7 2.7 0 0 1 0 5.4h-5z"/>'),
+    italic: S('<path d="M6.5 2.5h6M3.5 13.5h6M9.8 2.5l-3.6 11"/>'),
+    underline: S('<path d="M4.5 2.5v5a3.5 3.5 0 0 0 7 0v-5M3.5 14h9"/>'),
+    strike: S('<path d="M2.5 8h11M11 4.5c-.5-1.3-1.6-2-3.2-2-2 0-3.3 1-3.3 2.4 0 1.2.8 1.9 2.2 2.3M5 11.4c.5 1.4 1.7 2.1 3.2 2.1 2 0 3.4-1 3.4-2.5 0-.6-.2-1.1-.6-1.5"/>'),
+    textColor: S('<path d="m4 11.5 4-9 4 9M5.4 8.5h5.2"/><path d="M2.5 14h11" stroke-width="2.2"/>'),
+    heading: S('<path d="M3.5 2.5v11M10.5 2.5v11M3.5 8h7M12.5 13.5h1.5"/>'),
+    /* insert */
+    signature: S('<path d="M2 12.5c1.6 0 2.4-6 4-6 1.4 0 .3 4.5 1.6 4.5 1 0 1.6-2.4 2.6-2.4.9 0 .9 1.9 1.8 1.9.6 0 1.3-.5 2-1.2M2 14.5h12"/>'),
+    shapes: S('<circle cx="5.2" cy="5.2" r="3"/><rect x="7.8" y="7.8" width="6" height="6" rx="1"/>'),
+    textbox: S('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M8 6v4.5"/>'),
+    /* files & kinds */
+    file: S('<path d="M3.5 2h6L13 5.5V14h-9.5z"/><path d="M9.5 2v3.5H13"/>'),
+    fileSlides: S('<rect x="2" y="3" width="12" height="8.5" rx="1.3"/><path d="M8 11.5V14M5.5 14h5M5 6h4M5 8.5h6"/>'),
+    folderOpen: S('<path d="M2 12.5V4a1.5 1.5 0 0 1 1.5-1.5h2.6l1.5 1.6h4.4A1.5 1.5 0 0 1 13.5 5.6V7"/><path d="M2 12.5 3.8 7.8A1.2 1.2 0 0 1 4.9 7h8.9a.8.8 0 0 1 .75 1.1L13 12.5a1.5 1.5 0 0 1-1.4 1H3.4A1.4 1.4 0 0 1 2 12.5z"/>'),
+    save: S('<path d="M3 2.5h8l2.5 2.5v8a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z"/><path d="M5 2.5v3h5.5v-3M5 14v-4.5h6V14"/>'),
+    saveAs: S('<path d="M8.5 14H3.5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h7.5l2.5 2.5v2.5"/><path d="M5 2.5v3h5v-3"/><path d="m10.5 13.8.4-1.8 3.2-3.2 1.4 1.4-3.2 3.2z"/>'),
+    download: S('<path d="M8 2.5v8M4.8 7.5 8 10.7l3.2-3.2M2.5 12v1a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-1"/>'),
+    upload: S('<path d="M8 10.5v-8M4.8 5.5 8 2.3l3.2 3.2M2.5 12v1a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-1"/>'),
+    exportPdf: S('<path d="M9 2H3.5v12H13V6z"/><path d="M9 2v4h4"/><path d="M5.5 11.5h5M8 7.5v4M6.3 9.8 8 11.5l1.7-1.7"/>'),
+    print: S('<path d="M4.5 5.5V2.5h7v3"/><rect x="2" y="5.5" width="12" height="6" rx="1.3"/><path d="M4.5 9.5h7v4h-7z"/><path d="M11.5 7.6h.01"/>'),
+    share: S('<circle cx="11.8" cy="3.8" r="1.8"/><circle cx="4.2" cy="8" r="1.8"/><circle cx="11.8" cy="12.2" r="1.8"/><path d="m5.8 7.1 4.4-2.4M5.8 8.9l4.4 2.4"/>'),
+    /* templates */
+    letter: S('<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="m2.5 4.5 5.5 4.3 5.5-4.3"/>'),
+    resume: S('<rect x="2.5" y="2" width="11" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.5"/><path d="M4 9.2c.4-1 1.1-1.5 2-1.5s1.6.5 2 1.5M9.5 5h2M9.5 7h2M4.5 11.5h7"/>'),
+    meeting: S('<circle cx="5.5" cy="5.5" r="2"/><circle cx="11" cy="6" r="1.6"/><path d="M1.8 12.8c.5-2 1.9-3.1 3.7-3.1s3.2 1.1 3.7 3.1M9.4 9.4c.5-.3 1-.4 1.6-.4 1.5 0 2.6.9 3 2.7"/>'),
+    budget: S('<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6h12M6.5 6v7.5M9 8.5h3M9 11h3"/>'),
+    todo: S('<path d="m2.5 4 1.2 1.2L6 3M2.5 8.5l1.2 1.2L6 7.5"/><path d="M8.5 4.3h5M8.5 8.8h5M8.5 13h5"/><rect x="2.5" y="11.5" width="3" height="3" rx="0.6"/>'),
+    /* shell & navigation */
+    home: S('<path d="M2.5 7.2 8 2.5l5.5 4.7V13a1 1 0 0 1-1 1H10V10H6v4H3.5a1 1 0 0 1-1-1z"/>'),
+    plus: S('<path d="M8 3v10M3 8h10"/>'),
+    check: S('<path d="m3.5 8.5 3 3 6-7"/>'),
+    chevronRight: S('<path d="m6 3.5 4.5 4.5L6 12.5"/>'),
+    chevronDown: S('<path d="m3.5 6 4.5 4.5L12.5 6"/>'),
+    more: S('<circle cx="3.5" cy="8" r="0.9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="0.9" fill="currentColor" stroke="none"/>'),
+    command: S('<path d="M5.5 5.5v5M10.5 5.5v5M5.5 5.5h5M5.5 10.5h5"/><path d="M5.5 5.5H4a1.5 1.5 0 1 1 1.5-1.5zM10.5 5.5V4A1.5 1.5 0 1 1 12 5.5zM5.5 10.5V12A1.5 1.5 0 1 1 4 10.5zM10.5 10.5H12a1.5 1.5 0 1 1-1.5 1.5z"/>'),
+    keyboard: S('<rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M4 6.2h.01M6.4 6.2h.01M8.8 6.2h.01M11.2 6.2h.01M4 8.4h.01M11.2 8.4h.01M6.4 8.4h2.4M5 10.4h6"/>'),
+    palette: S('<path d="M8 2a6 6 0 0 0 0 12c.9 0 1.3-.6 1.3-1.2 0-.9-.8-1.1-.8-1.9 0-.7.6-1.2 1.3-1.2h1.5A2.7 2.7 0 0 0 14 7 5.4 5.4 0 0 0 8 2z"/><circle cx="5" cy="7" r="0.8" fill="currentColor" stroke="none"/><circle cx="7.2" cy="4.8" r="0.8" fill="currentColor" stroke="none"/><circle cx="10.4" cy="5.2" r="0.8" fill="currentColor" stroke="none"/>'),
+    sidebar: S('<rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M6 2.5v11M3.6 5h1M3.6 7h1"/>'),
+    star: S('<path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/>'),
+    starFilled: S('<path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z" fill="currentColor"/>'),
+    clock: S('<circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2.2 1.4"/>'),
+    grid: S('<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>'),
+    list: S('<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>'),
+    trash: S('<path d="M2.5 4.5h11M6.5 4.5V3a.8.8 0 0 1 .8-.8h1.4a.8.8 0 0 1 .8.8v1.5M4 4.5l.6 8.4a1.2 1.2 0 0 0 1.2 1.1h4.4a1.2 1.2 0 0 0 1.2-1.1L12 4.5"/>'),
+    refresh: S('<path d="M13.5 8A5.5 5.5 0 1 1 11.8 4"/><path d="M13.5 2.5V5.5h-3"/>'),
+    externalLink: S('<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/>'),
+    copyPath: S('<path d="M6.5 9.5 9.5 6.5M5 7 3.5 8.5a2.47 2.47 0 0 0 3.5 3.5L8.5 10.5M11 9l1.5-1.5A2.47 2.47 0 0 0 9 4L7.5 5.5"/>'),
+    info: S('<circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.8M8 5h.01"/>'),
+    warning: S('<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.3h.01"/>'),
+    success: S('<circle cx="8" cy="8" r="6"/><path d="m5.3 8.2 1.8 1.8 3.6-4"/>'),
+    error: S('<circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.6M8 10.8h.01"/>'),
+    user: S('<circle cx="8" cy="5.8" r="2.6"/><path d="M3 13.5c.6-2.4 2.6-3.7 5-3.7s4.4 1.3 5 3.7"/>'),
+    logout: S('<path d="M6 13.5H3.5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1H6M10.5 11l3-3-3-3M13.5 8H6"/>'),
+    cloud: S('<path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.7-.8 3.4 3.4 0 0 1 .2 6.8z"/>'),
+    sparkle: S('<path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l1.8 1.8M10.2 10.2 12 12M12 4l-1.8 1.8M5.8 10.2 4 12"/>'),
+    window: S('<rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M2 5.5h12"/>'),
+    density: S('<path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h11M2.5 12.5h11"/>'),
+    tabs: S('<path d="M2 13.5V5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v7"/><path d="M1.5 13.5h13"/>'),
+    present: S('<rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="m6.8 5 3 1.8-3 1.8zM8 11v2.5M5.5 13.5h5"/>')
   };
+  const ICONS = window.MargoIcons;
 
   /* ---------------- state ---------------- */
   const MAX_TABS = 8;
@@ -113,8 +205,10 @@
     editor: null,
     dirty: false,
     theme: 'light',
-    tabs: [],         // { id, doc, dirty, editor, pane, toolbar, host, statusLeft, statusRight }
-    activeTabId: null
+    tabs: [],         // { id, doc, dirty, editor, pane, toolbar, host, statusLeft, statusRight, status, saving }
+    activeTabId: null,
+    lastActiveTabId: null, // the tab to return to from home (Ctrl+Tab, "Back to document")
+    closedPaths: []   // most recent last - Ctrl+Shift+T reopens them
   };
 
   const $ = (id) => document.getElementById(id);
@@ -125,34 +219,118 @@
     docBadge: $('doc-badge'), docKindDot: $('doc-kind-dot'),
     btnHome: $('btn-home'),
     statusLeft: null, statusRight: null,
-    tabBar: $('tab-bar'), tabPanes: $('tab-panes'),
+    tabBar: $('tab-bar'), tabPanes: $('tab-panes'), tabNew: $('btn-tab-new'),
     recentsList: $('recents-grid'), sideEmpty: $('side-empty'),
+    sidePinnedSection: $('side-pinned-section'), sidePinned: $('side-pinned'),
+    sideSearch: $('side-search'), sideGroupBtn: $('btn-side-group'),
+    sideNewRow: $('side-new-row'),
     btnClearRecents: $('btn-clear-recents'),
     homeTiles: $('home-tiles'), homeTilesEmpty: $('home-tiles-empty'),
+    homePinnedWrap: $('home-pinned-wrap'), homePinned: $('home-pinned'),
+    homeSearch: $('home-search'), homeFilter: $('home-filter'),
+    homeNewRow: $('home-new-row'), homeTemplates: $('home-templates'),
+    homeGreeting: $('home-greeting'), homeDate: $('home-date'),
     btnClearHomeRecents: $('btn-clear-home-recents'), btnHomeOpen: $('btn-home-open'),
+    btnHomePalette: $('btn-home-palette'),
     btnSidebarSettings: $('btn-sidebar-settings'),
+    btnSideShortcuts: $('btn-side-shortcuts'), btnSideTheme: $('btn-side-theme'),
     shell: $('shell'), sidebar: $('sidebar'), hotzone: $('side-hotzone'),
     pinBtn: $('btn-pin-sidebar'), menubar: $('menubar'),
-    modalBackdrop: $('modal-backdrop'), modal: document.querySelector('.modal'),
+    modalBackdrop: $('modal-backdrop'), modal: document.querySelector('#modal-backdrop .modal'),
     modalTitle: $('modal-title'), modalBody: $('modal-body'), modalActions: $('modal-actions'),
+    paletteBackdrop: $('palette-backdrop'), paletteInput: $('palette-input'), paletteList: $('palette-list'),
+    btnCommand: $('btn-command'),
+    dropOverlay: $('drop-overlay'),
     toastWrap: $('toast-wrap'),
     btnAccount: $('btn-account'), accountAvatar: $('account-avatar'), accountMenu: $('account-menu')
   };
 
-  const KIND_LABEL = { md: 'Markdown', doc: 'Word document', sheet: 'Spreadsheet', pdf: 'PDF' };
-  const KIND_BADGE = { md: 'MD', doc: 'DOCX', sheet: 'XLSX', pdf: 'PDF' };
+  const KIND_LABEL = { md: 'Markdown', doc: 'Word document', sheet: 'Spreadsheet', pdf: 'PDF', slides: 'Presentation' };
+  const KIND_BADGE = { md: 'MD', doc: 'DOCX', sheet: 'XLSX', pdf: 'PDF', slides: 'PPTX' };
+  const KIND_ICON = { md: 'fileMd', doc: 'fileDoc', sheet: 'fileSheet', pdf: 'filePdf', slides: 'fileSlides' };
+  /* Every kind of blank document Margo can start. 'slides' only shows up when
+     its editor has registered itself (window.MargoEditors.slides). */
+  const NEW_KINDS = [
+    { kind: 'doc', label: 'Document', long: 'Word document', meta: 'Word · .docx' },
+    { kind: 'sheet', label: 'Spreadsheet', long: 'Spreadsheet', meta: 'Excel · .xlsx' },
+    { kind: 'slides', label: 'Presentation', long: 'Presentation', meta: 'Slides · .pptx', optional: true },
+    { kind: 'md', label: 'Markdown', long: 'Markdown note', meta: 'Note · .md' },
+    { kind: 'pdf', label: 'PDF', long: 'PDF document', meta: 'Blank page · .pdf' }
+  ];
+  function kindAvailable(kind) {
+    const def = NEW_KINDS.find((k) => k.kind === kind);
+    if (!def) return false;
+    return !def.optional || !!(window.MargoEditors && window.MargoEditors[kind]);
+  }
+  function availableKinds() {
+    return NEW_KINDS.filter((k) => kindAvailable(k.kind));
+  }
 
   /* ---------------- toast & modal ---------------- */
-  function toast(msg, kind) {
+  /* toast(message, kind?, opts?) - kind: 'error' | 'success' | 'info' | null.
+     opts.actions: [{ label, primary?, onClick }] turns it into a small prompt
+     that stays up longer; opts.duration (ms, 0 = until dismissed).
+     Returns { dismiss }. */
+  const TOAST_MAX = 4;
+  function toast(msg, kind, opts) {
+    const o = opts || {};
     const t = document.createElement('div');
-    t.className = 'toast' + (kind === 'error' ? ' error' : '');
-    t.textContent = msg;
+    t.className = 'toast' + (kind ? ' ' + kind : '');
+    t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    const iconKey = kind === 'error' ? 'error' : kind === 'success' ? 'success' : kind === 'info' ? 'info' : null;
+    if (iconKey) {
+      const ic = document.createElement('span');
+      ic.className = 'toast-icon';
+      ic.innerHTML = ICONS[iconKey];
+      t.appendChild(ic);
+    }
+    const text = document.createElement('span');
+    text.className = 'toast-msg';
+    text.textContent = msg;
+    t.appendChild(text);
+    let timer = null;
+    let gone = false;
+    const dismiss = () => {
+      if (gone) return;
+      gone = true;
+      clearTimeout(timer);
+      t.classList.add('leaving');
+      setTimeout(() => t.remove(), 230);
+    };
+    (o.actions || []).forEach((a) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'toast-action' + (a.primary ? ' primary' : '');
+      b.textContent = a.label;
+      b.addEventListener('click', () => {
+        dismiss();
+        try { a.onClick && a.onClick(); } catch (err) { console.error(err); }
+      });
+      t.appendChild(b);
+    });
     els.toastWrap.appendChild(t);
-    setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.25s'; }, 2600);
-    setTimeout(() => t.remove(), 2900);
+    const live = [...els.toastWrap.querySelectorAll('.toast:not(.leaving)')];
+    if (live.length > TOAST_MAX) live.slice(0, live.length - TOAST_MAX).forEach((x) => x.remove());
+    const duration = o.duration != null ? o.duration
+      : (o.actions && o.actions.length) ? 12000
+        : kind === 'error' ? 4500 : 2800;
+    if (duration > 0) {
+      timer = setTimeout(dismiss, duration);
+      /* Hovering holds it, so a message with a button is not whisked away
+         while the pointer is on its way there. */
+      t.addEventListener('mouseenter', () => clearTimeout(timer));
+      t.addEventListener('mouseleave', () => { if (!gone) timer = setTimeout(dismiss, 1600); });
+    }
+    return { dismiss, el: t };
   }
 
   let modalResolve = null;
+  let modalReturnFocus = null;
+  const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  function isModalOpen() {
+    return !els.modalBackdrop.classList.contains('hidden');
+  }
+  /* opts: { wide, className, initialFocus (element) } */
   function openModal(title, bodyEl, actions, opts) {
     /* A second modal opening over the first replaced the resolver, and
        whoever was awaiting the first one then waited for a promise nothing
@@ -162,16 +340,22 @@
       const orphaned = modalResolve;
       modalResolve = null;
       orphaned(null);
+    } else if (!isModalOpen()) {
+      modalReturnFocus = document.activeElement;
     }
-    els.modal.classList.toggle('wide', !!(opts && opts.wide));
+    closePalette();
+    els.modal.className = 'modal' + (opts && opts.wide ? ' wide' : '') + (opts && opts.className ? ' ' + opts.className : '');
     els.modalTitle.textContent = title;
     els.modalBody.innerHTML = '';
     els.modalBody.appendChild(bodyEl);
     els.modalActions.innerHTML = '';
-    actions.forEach(({ label, primary, value, keepOpen }) => {
+    let primaryBtn = null;
+    actions.forEach(({ label, primary, danger, value, keepOpen }) => {
       const b = document.createElement('button');
-      b.className = 'btn ' + (primary ? 'primary' : 'ghost');
+      b.type = 'button';
+      b.className = 'btn ' + (danger ? 'danger' : primary ? 'primary' : 'ghost');
       b.textContent = label;
+      if (primary) primaryBtn = b;
       b.addEventListener('click', () => {
         const result = typeof value === 'function' ? value() : value;
         /* A button that answers the prompt closes it, which is every button
@@ -183,19 +367,65 @@
       els.modalActions.appendChild(b);
     });
     els.modalBackdrop.classList.remove('hidden');
+    /* Keys typed while a dialog is up used to land in the document behind
+       it, because focus never left the editor. The dialog takes focus (its
+       first field, else its default button) and Tab cycles inside it. */
+    const target = (opts && opts.initialFocus)
+      || els.modalBody.querySelector('[autofocus]')
+      || primaryBtn
+      || els.modalActions.querySelector('button');
+    if (target) {
+      try { target.focus({ preventScroll: true }); } catch {}
+    }
     return new Promise((resolve) => { modalResolve = resolve; });
   }
   function closeModal(result) {
+    const wasOpen = isModalOpen();
     els.modalBackdrop.classList.add('hidden');
+    const back = modalReturnFocus;
+    modalReturnFocus = null;
+    /* Focus goes back to the control that opened the dialog - but never into
+       a document body: an editor that saved its selection before asking
+       restores it itself, and focusing the page first would plant the caret
+       at the top and overwrite what it saved. */
+    if (wasOpen && back && back.isConnected && typeof back.focus === 'function'
+      && !back.isContentEditable && !(back.closest && back.closest('.editor-host'))) {
+      try { back.focus({ preventScroll: true }); } catch {}
+    }
     if (modalResolve) { modalResolve(result); modalResolve = null; }
   }
   els.modalBackdrop.addEventListener('mousedown', (e) => {
     if (e.target === els.modalBackdrop) closeModal(null);
   });
+  function popoverOpen() {
+    return !!document.querySelector('.mc-pop, .ctx-menu, .doc-ctx-menu, #menubar > .menu-drop');
+  }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !els.modalBackdrop.classList.contains('hidden')) {
+    if (!isModalOpen()) return;
+    if (e.key === 'Escape') {
+      /* A colour picker or menu opened from inside the dialog closes first. */
+      if (popoverOpen()) return;
       e.preventDefault();
+      e.stopPropagation();
       closeModal(null);
+      return;
+    }
+    if (e.key === 'Tab') {
+      const items = [...els.modal.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const inside = els.modal.contains(document.activeElement);
+      if (!inside) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   }, true);
 
@@ -206,22 +436,89 @@
     const p = openModal(title, input, [
       { label: 'Cancel', value: null },
       { label: 'OK', primary: true, value: () => input.value }
-    ]);
+    ], { initialFocus: input });
     setTimeout(() => { input.focus(); input.select(); }, 40);
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') closeModal(input.value);
+      if (e.key === 'Enter') { e.preventDefault(); closeModal(input.value); }
       if (e.key === 'Escape') closeModal(null);
     });
     return p;
   }
-  function confirmModal(title, message) {
+  function confirmModal(title, message, opts) {
     const div = document.createElement('div');
+    div.className = 'modal-lead';
     div.textContent = message;
     return openModal(title, div, [
       { label: 'Cancel', value: false },
-      { label: 'Delete', primary: true, value: true }
+      { label: (opts && opts.confirmLabel) || 'Delete', primary: true, value: true }
     ]);
   }
+
+  /* ---------------- settings (persisted per install in localStorage) ---------------- */
+  const SETTINGS_KEY = 'margo.settings';
+  const SETTINGS_DEFAULTS = {
+    defaultKind: 'doc',        // what Ctrl+N and the + tab button create
+    autosave: false,           // save documents that already have a file, in the background
+    autosaveSec: 60,
+    spellcheck: true,
+    density: 'comfortable',    // 'comfortable' | 'compact'
+    reopenSession: false,      // reopen the tabs that were open when Margo closed
+    sideGroup: false           // library grouped by file type
+  };
+  const AUTOSAVE_CHOICES = [15, 30, 60, 120, 300];
+  function readSettings() {
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; } catch { raw = {}; }
+    const s = { ...SETTINGS_DEFAULTS };
+    if (NEW_KINDS.some((k) => k.kind === raw.defaultKind)) s.defaultKind = raw.defaultKind;
+    if (typeof raw.autosave === 'boolean') s.autosave = raw.autosave;
+    if (AUTOSAVE_CHOICES.includes(Number(raw.autosaveSec))) s.autosaveSec = Number(raw.autosaveSec);
+    if (typeof raw.spellcheck === 'boolean') s.spellcheck = raw.spellcheck;
+    if (raw.density === 'compact' || raw.density === 'comfortable') s.density = raw.density;
+    if (typeof raw.reopenSession === 'boolean') s.reopenSession = raw.reopenSession;
+    if (typeof raw.sideGroup === 'boolean') s.sideGroup = raw.sideGroup;
+    return s;
+  }
+  let settings = readSettings();
+  function updateSettings(patch) {
+    settings = { ...settings, ...patch };
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+    applySettings();
+    try { document.dispatchEvent(new CustomEvent('margo:settings', { detail: { ...settings } })); } catch {}
+    return settings;
+  }
+  function applySettings() {
+    document.documentElement.dataset.density = settings.density;
+    applySpellcheck(document);
+    restartAutosave();
+    persistSession();
+    if (els.sideGroupBtn) els.sideGroupBtn.setAttribute('aria-pressed', settings.sideGroup ? 'true' : 'false');
+  }
+  /* The global switch only ever turns checking off: when it is on, every
+     field goes back to whatever its editor chose (the Markdown source, for
+     one, keeps it off by design). */
+  function applySpellcheckTo(el) {
+    if (!el || el.closest('#modal-backdrop, #palette-backdrop')) return;
+    if (!settings.spellcheck) {
+      if (el.dataset.margoSpell === undefined) el.dataset.margoSpell = el.getAttribute('spellcheck') ?? '';
+      el.spellcheck = false;
+    } else if (el.dataset.margoSpell !== undefined) {
+      const orig = el.dataset.margoSpell;
+      delete el.dataset.margoSpell;
+      if (orig === '') el.removeAttribute('spellcheck');
+      else el.setAttribute('spellcheck', orig);
+    }
+  }
+  function applySpellcheck(root) {
+    (root || document).querySelectorAll('[contenteditable="true"], textarea, [data-margo-spell]').forEach(applySpellcheckTo);
+  }
+  /* Pages and cells an editor creates later pick the setting up the moment
+     they are first focused. */
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!el || !(el.isContentEditable || el.tagName === 'TEXTAREA')) return;
+    applySpellcheckTo(el.isContentEditable ? (el.closest('[contenteditable="true"]') || el) : el);
+  });
 
   /* ---------------- theme ---------------- */
   function applyTheme(theme, persist) {
@@ -230,6 +527,22 @@
     document.documentElement.dataset.theme = def.id;
     document.documentElement.dataset.scheme = def.scheme;
     if (persist) window.margo.theme.set(def.id);
+    if (els.btnSideTheme) {
+      els.btnSideTheme.innerHTML = def.scheme === 'dark' ? ICONS.sun : ICONS.moon;
+      els.btnSideTheme.title = def.scheme === 'dark' ? 'Switch to a light theme' : 'Switch to a dark theme';
+    }
+  }
+  /* Quick toggle between the light and dark families: remembers the last
+     theme used on each side so Paper comes back as Paper, not Light. */
+  function toggleScheme() {
+    const cur = window.MargoThemes.get(state.theme);
+    const goingDark = !cur || cur.scheme !== 'dark';
+    let target = null;
+    try { target = localStorage.getItem(goingDark ? 'margo.lastDarkTheme' : 'margo.lastLightTheme'); } catch {}
+    const def = window.MargoThemes.get(target);
+    if (!def || (def.scheme === 'dark') !== goingDark) target = goingDark ? 'dark' : 'light';
+    try { localStorage.setItem(goingDark ? 'margo.lastLightTheme' : 'margo.lastDarkTheme', state.theme); } catch {}
+    applyTheme(target, true);
   }
 
   /* ---------------- header / title ---------------- */
@@ -253,23 +566,92 @@
     try { return crypto.randomUUID(); } catch {}
     return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   }
-  function markDirty() {
-    const t = findTab(state.activeTabId);
-    if (t && !t.draftId) t.draftId = newDraftId();
-    if (!state.dirty) {
-      state.dirty = true;
-      if (t) t.dirty = true;
+  /* Each editor gets its own markDirty/setStatus bound to its tab. They used
+     to act on whichever tab was in front, so a background tab finishing its
+     pagination or a PDF finishing its load stamped its status line - or its
+     unsaved-changes dot - onto the document the author was looking at. */
+  function markTabDirty(t) {
+    if (!t) return;
+    if (!t.draftId) t.draftId = newDraftId();
+    const was = t.dirty;
+    t.dirty = true;
+    t.editedAt = Date.now();
+    t.editGen = (t.editGen || 0) + 1;
+    if (state.activeTabId === t.id) state.dirty = true;
+    if (!was) {
       refreshHeader();
       paintTabs();
     }
-    if (t) scheduleDraft(t);
+    refreshSaveState(t);
+    scheduleDraft(t);
   }
-  function setStatus(left, kind) {
-    const t = findTab(state.activeTabId);
+  function markDirty() {
+    markTabDirty(findTab(state.activeTabId));
+  }
+  function setTabStatus(t, left, kind) {
     if (!t || !t.status) return;
     t.status.setLeft(left || '');
     if (kind !== undefined) t.status.setKind(kind || '');
   }
+  function setStatus(left, kind) {
+    setTabStatus(findTab(state.activeTabId), left, kind);
+  }
+  function timeShort(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 45) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} min ago`;
+    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  /* The save indicator in the status bar: new / edited / saving / saved. */
+  function refreshSaveState(t) {
+    if (!t || !t.status || !t.status.setSave) return;
+    if (t.saving) { t.status.setSave('saving', 'Saving…'); return; }
+    if (t.saveError) { t.status.setSave('error', 'Save failed'); return; }
+    if (t.dirty) {
+      const auto = settings.autosave && t.doc && t.doc.path && autosaveEligible(t);
+      t.status.setSave('dirty', auto ? 'Edited · autosave on' : 'Unsaved changes');
+      return;
+    }
+    if (!t.doc || !t.doc.path) { t.status.setSave('new', 'Not saved yet'); return; }
+    if (t.savedAt) {
+      t.status.setSave('saved', (t.autoSaved ? 'Autosaved ' : 'Saved ') + timeShort(t.savedAt));
+      return;
+    }
+    t.status.setSave('saved', 'Saved');
+  }
+  /* Word count, cell, page... whatever the editor reports through
+     commands.status(); editors without one simply leave it blank. */
+  function refreshStatusInfo(t) {
+    if (!t || !t.status || !t.status.setInfo) return;
+    const fn = t.editor && t.editor.commands && t.editor.commands.status;
+    let text = '';
+    if (typeof fn === 'function') {
+      try {
+        const r = fn();
+        text = typeof r === 'string' ? r : '';
+      } catch { text = ''; }
+    }
+    t.status.setInfo(text);
+  }
+  let statusInfoTimer = null;
+  function scheduleStatusInfo() {
+    if (statusInfoTimer) return;
+    statusInfoTimer = setTimeout(() => {
+      statusInfoTimer = null;
+      if (state.view === 'editor') refreshStatusInfo(findTab(state.activeTabId));
+    }, 120);
+  }
+  document.addEventListener('input', scheduleStatusInfo, true);
+  document.addEventListener('selectionchange', scheduleStatusInfo);
+  document.addEventListener('keyup', scheduleStatusInfo, true);
+  document.addEventListener('mouseup', scheduleStatusInfo, true);
+  setInterval(() => {
+    if (document.visibilityState !== 'visible' || state.view !== 'editor') return;
+    const t = findTab(state.activeTabId);
+    refreshStatusInfo(t);
+    refreshSaveState(t);
+  }, 2000);
 
   function createStatusChrome() {
     let zoomMin = 0.5;
@@ -286,6 +668,13 @@
 
     const statusRight = document.createElement('div');
     statusRight.className = 'status-right';
+
+    const infoEl = document.createElement('span');
+    infoEl.className = 'status-info hidden';
+
+    const saveEl = document.createElement('span');
+    saveEl.className = 'status-save hidden';
+    saveEl.dataset.state = 'new';
 
     const kindEl = document.createElement('span');
     kindEl.className = 'status-kind hidden';
@@ -328,6 +717,8 @@
     zoomEl.appendChild(zoomInBtn);
     zoomEl.appendChild(pctBtn);
 
+    statusRight.appendChild(infoEl);
+    statusRight.appendChild(saveEl);
     statusRight.appendChild(kindEl);
     statusRight.appendChild(viewsEl);
     statusRight.appendChild(zoomEl);
@@ -419,6 +810,16 @@
       setKind(label) {
         kindEl.textContent = label || '';
         kindEl.classList.toggle('hidden', !label);
+      },
+      setInfo(text) {
+        if (infoEl.textContent !== (text || '')) infoEl.textContent = text || '';
+        infoEl.title = text || '';
+        infoEl.classList.toggle('hidden', !text);
+      },
+      setSave(st, text) {
+        saveEl.dataset.state = st;
+        if (saveEl.textContent !== text) saveEl.textContent = text;
+        saveEl.classList.remove('hidden');
       },
       setViewModes(modes) {
         viewsEl.innerHTML = '';
@@ -630,7 +1031,7 @@
     els.statusLeft = null;
     els.statusRight = null;
   }
-  function createPane(tabId) {
+  function createPane(tabId, before) {
     const pane = document.createElement('div');
     pane.className = 'tab-pane';
     pane.dataset.tabId = String(tabId);
@@ -651,50 +1052,69 @@
     pane.appendChild(toolbar);
     pane.appendChild(host);
     pane.appendChild(statusbar);
-    els.tabPanes.appendChild(pane);
+    if (before && before.parentNode === els.tabPanes) els.tabPanes.insertBefore(pane, before);
+    else els.tabPanes.appendChild(pane);
     return { pane, toolbar, host, statusLeft: chrome.statusLeft, statusRight: chrome.statusRight, status: chrome.api };
+  }
+
+  /* ---- tab strip (lives in the titlebar) ---- */
+  let dragTabId = null;
+  function tabTitle(t) {
+    const name = (t.doc && t.doc.name) || 'Untitled';
+    const where = t.doc && t.doc.path ? t.doc.path : 'Not saved yet';
+    return `${name}${t.dirty ? ' • unsaved changes' : ''}\n${where}`;
   }
   function paintTabs() {
     const bar = els.tabBar;
     bar.innerHTML = '';
-    if (!state.tabs.length) {
-      bar.classList.add('hidden');
-      return;
-    }
-    bar.classList.remove('hidden');
+    const has = state.tabs.length > 0;
+    bar.classList.toggle('hidden', !has);
+    if (els.tabNew) els.tabNew.classList.toggle('hidden', !has);
     state.tabs.forEach((t) => {
+      const active = t.id === state.activeTabId && state.view === 'editor';
       const el = document.createElement('div');
-      el.className = 'tab' + (t.id === state.activeTabId && state.view === 'editor' ? ' active' : '');
+      el.className = 'tab' + (active ? ' active' : '') + (t.dirty ? ' is-dirty' : '');
       el.dataset.tabId = String(t.id);
       el.setAttribute('role', 'tab');
-      el.title = (t.doc && t.doc.name) || 'Untitled';
+      el.setAttribute('aria-selected', active ? 'true' : 'false');
+      el.tabIndex = active || (!state.activeTabId && t === state.tabs[0]) ? 0 : -1;
+      el.title = tabTitle(t);
+      el.draggable = true;
 
-      const dot = document.createElement('span');
-      dot.className = 'doc-kind-dot';
-      if (t.doc) dot.dataset.kind = t.doc.kind;
+      const kind = document.createElement('span');
+      kind.className = 'tab-kind';
+      if (t.doc) {
+        kind.dataset.kind = t.doc.kind;
+        kind.innerHTML = ICONS[KIND_ICON[t.doc.kind]] || ICONS.file;
+      }
 
       const name = document.createElement('span');
       name.className = 'tab-name';
       name.textContent = (t.doc && t.doc.name) || 'Untitled';
 
-      const dirty = document.createElement('span');
-      dirty.className = 'doc-dirty' + (t.dirty ? '' : ' hidden');
-      dirty.title = 'Unsaved changes';
-
+      const end = document.createElement('span');
+      end.className = 'tab-end';
       const close = document.createElement('button');
       close.type = 'button';
       close.className = 'tab-close';
-      close.innerHTML = window.MargoIcons.close;
-      close.title = 'Close';
+      close.innerHTML = ICONS.close;
+      close.title = 'Close (Ctrl+W)';
+      close.setAttribute('aria-label', 'Close ' + ((t.doc && t.doc.name) || 'Untitled'));
+      close.tabIndex = -1;
+      close.addEventListener('mousedown', (e) => e.stopPropagation());
       close.addEventListener('click', (e) => {
         e.stopPropagation();
         closeTab(t.id);
       });
+      const dirty = document.createElement('span');
+      dirty.className = 'doc-dirty' + (t.dirty ? '' : ' hidden');
+      dirty.title = 'Unsaved changes';
+      end.appendChild(close);
+      end.appendChild(dirty);
 
-      el.appendChild(dot);
+      el.appendChild(kind);
       el.appendChild(name);
-      el.appendChild(dirty);
-      el.appendChild(close);
+      el.appendChild(end);
       el.addEventListener('click', () => activateTab(t.id));
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) {
@@ -705,15 +1125,105 @@
       el.addEventListener('mousedown', (e) => {
         if (e.button === 1) e.preventDefault();
       });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        tabContextMenu(t, e.clientX, e.clientY);
+      });
+      el.addEventListener('keydown', (e) => {
+        const i = state.tabs.indexOf(t);
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const next = state.tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + state.tabs.length) % state.tabs.length];
+          const nextEl = bar.querySelector(`.tab[data-tab-id="${next.id}"]`);
+          if (nextEl) nextEl.focus();
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activateTab(t.id);
+        } else if (e.key === 'Delete') {
+          e.preventDefault();
+          closeTab(t.id);
+        } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          const r = el.getBoundingClientRect();
+          tabContextMenu(t, r.left + 8, r.bottom);
+        }
+      });
+      /* drag to reorder */
+      el.addEventListener('dragstart', (e) => {
+        dragTabId = t.id;
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('application/x-margo-tab', String(t.id)); } catch {}
+      });
+      el.addEventListener('dragend', () => {
+        dragTabId = null;
+        bar.querySelectorAll('.tab').forEach((x) => x.classList.remove('dragging', 'drop-before', 'drop-after'));
+      });
+      el.addEventListener('dragover', (e) => {
+        if (dragTabId == null || dragTabId === t.id) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const r = el.getBoundingClientRect();
+        const after = e.clientX > r.left + r.width / 2;
+        el.classList.toggle('drop-after', after);
+        el.classList.toggle('drop-before', !after);
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-after'));
+      el.addEventListener('drop', (e) => {
+        if (dragTabId == null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const moving = findTab(dragTabId);
+        dragTabId = null;
+        if (!moving || moving === t) return;
+        const r = el.getBoundingClientRect();
+        const after = e.clientX > r.left + r.width / 2;
+        state.tabs.splice(state.tabs.indexOf(moving), 1);
+        const at = state.tabs.indexOf(t) + (after ? 1 : 0);
+        state.tabs.splice(at, 0, moving);
+        paintTabs();
+        persistSession();
+      });
       bar.appendChild(el);
     });
+    const activeEl = bar.querySelector('.tab.active');
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+
+  function tabContextMenu(t, x, y) {
+    const i = state.tabs.indexOf(t);
+    const hasPath = !!(t.doc && t.doc.path);
+    const pinned = hasPath && isPinned(t.doc.path);
+    window.MargoMenubar.contextMenu(x, y, [
+      { label: 'Close', accel: 'Ctrl+W', icon: ICONS.close, action: () => closeTab(t.id) },
+      { label: 'Close others', enabled: state.tabs.length > 1, action: () => closeOtherTabs(t.id) },
+      { label: 'Close tabs to the right', enabled: i < state.tabs.length - 1, action: () => closeTabsToRight(t.id) },
+      { sep: true },
+      { label: 'Save', accel: 'Ctrl+S', icon: ICONS.save, action: async () => { await activateTab(t.id); await saveDoc(false); } },
+      { label: 'Reload from disk', icon: ICONS.refresh, enabled: hasPath, action: () => reloadTabFromDisk(t, true) },
+      { sep: true },
+      { label: pinned ? 'Unpin from library' : 'Pin to library', icon: pinned ? ICONS.starFilled : ICONS.star, enabled: hasPath,
+        action: () => togglePin(t.doc.path, t.doc.name) },
+      { label: 'Copy file path', icon: ICONS.copyPath, enabled: hasPath, action: () => copyText(t.doc.path, 'Path copied') }
+    ]);
+  }
+
+  async function copyText(text, done) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(done || 'Copied', 'success');
+    } catch {
+      toast('Could not copy to the clipboard', 'error');
+    }
+  }
+
   async function activateTab(id) {
     const t = findTab(id);
     if (!t) return;
     if (state.activeTabId === id && state.view === 'editor') return;
     if (state.activeTabId && state.activeTabId !== id) syncActiveTab();
     applyTabAliases(t);
+    state.lastActiveTabId = id;
     state.view = 'editor';
     document.body.classList.remove('margo-focus-mode');
     els.home.classList.add('hidden');
@@ -722,20 +1232,70 @@
     state.tabs.forEach((x) => { x.pane.hidden = x.id !== t.id; });
     paintTabs();
     refreshHeader();
-    if (t.editor && typeof t.editor.focus === 'function') t.editor.focus();
+    refreshSaveState(t);
+    refreshStatusInfo(t);
+    persistSession();
+    if (t.editor && typeof t.editor.focus === 'function') {
+      try { t.editor.focus(); } catch {}
+    }
   }
+
+  /* The context an editor is built with. Everything in it is bound to the
+     editor's own tab, whether or not that tab is in front. */
+  function buildCtx(tab) {
+    const id = tab.id;
+    return {
+      markDirty: () => markTabDirty(tab),
+      setStatus: (left, kind) => setTabStatus(tab, left, kind),
+      status: tab.status,
+      toolbar: tab.toolbar,
+      inputModal,
+      confirmModal,
+      openModal,
+      closeModal,
+      toast,
+      icons: ICONS,
+      contextMenu: (x, y, items) => window.MargoMenubar.contextMenu(x, y, items),
+      settings: () => ({ ...settings }),
+      /* An editor that listens on the document rather than on its own pane
+         hears every key in the window, including keys meant for whichever
+         tab is in front. isActive lets it tell the difference; nothing else
+         can, because a background tab's pane is hidden but its editor is
+         still very much alive. */
+      isActive: () => state.activeTabId === id && state.view === 'editor'
+    };
+  }
+  async function mountEditor(tab, doc) {
+    const factory = window.MargoEditors[doc.kind];
+    if (!factory) throw new Error('Unknown document type');
+    const editor = factory(buildCtx(tab));
+    tab.editor = editor;
+    if (state.activeTabId === tab.id) state.editor = editor;
+    await Promise.resolve(editor.mount(tab.host, doc));
+  }
+  function discardTabChrome(tab) {
+    if (tab.editor && typeof tab.editor.destroy === 'function') {
+      try { tab.editor.destroy(); } catch {}
+    }
+    if (tab.status && typeof tab.status.destroy === 'function') {
+      try { tab.status.destroy(); } catch {}
+    }
+    try { tab.pane.remove(); } catch {}
+  }
+
   async function openInTab(doc, opts) {
     if (doc.path && !(opts && opts.draftId)) {
       const existing = findTabByPath(doc.path);
       if (existing) {
         await activateTab(existing.id);
-        return;
+        return existing;
       }
     }
     if (state.tabs.length >= MAX_TABS) {
-      toast('Close a tab first (maximum 8).');
-      return;
+      toast(`Close a tab first — Margo keeps up to ${MAX_TABS} documents open.`);
+      return null;
     }
+    if (!window.MargoEditors[doc.kind]) throw new Error('Unknown document type');
     const id = ++tabSeq;
     const chrome = createPane(id);
     document.body.classList.remove('margo-focus-mode');
@@ -751,108 +1311,156 @@
       host: chrome.host,
       statusLeft: chrome.statusLeft,
       statusRight: chrome.statusRight,
-      status: chrome.status
+      status: chrome.status,
+      savedAt: doc.path && !(opts && opts.dirty) ? Date.now() : null
     };
+    const previous = state.activeTabId;
     state.tabs.push(tab);
     await activateTab(id);
-    /* An editor that listens on the document rather than on its own pane
-       hears every key in the window, including keys meant for whichever tab
-       is in front. isActive lets it tell the difference; nothing else can,
-       because a background tab's pane is hidden but its editor is still very
-       much alive. */
-    const ctx = {
-      markDirty,
-      setStatus,
-      status: tab.status,
-      toolbar: tab.toolbar,
-      inputModal,
-      confirmModal,
-      openModal,
-      closeModal,
-      toast,
-      isActive: () => state.activeTabId === id
-    };
-    const factory = window.MargoEditors[doc.kind];
-    if (!factory) {
-      state.tabs = state.tabs.filter((x) => x.id !== id);
-      try { tab.pane.remove(); } catch {}
-      if (state.activeTabId === id) clearAliases();
-      throw new Error('Unknown document type');
-    }
-    const editor = factory(ctx);
-    tab.editor = editor;
-    state.editor = editor;
     try {
-      await Promise.resolve(editor.mount(tab.host, doc));
+      await mountEditor(tab, doc);
     } catch (err) {
+      /* A document that fails to mount used to leave the editor view up with
+         nothing in it - no tab, no pane, no way back but the Home button. */
       state.tabs = state.tabs.filter((x) => x.id !== id);
-      try { tab.pane.remove(); } catch {}
-      if (state.activeTabId === id) clearAliases();
+      discardTabChrome(tab);
+      if (state.activeTabId === id) {
+        clearAliases();
+        const back = findTab(previous) || state.tabs[state.tabs.length - 1];
+        if (back) await activateTab(back.id);
+        else showLanding();
+      }
+      paintTabs();
       throw err;
     }
     if (tab.dirty) {
-      state.dirty = true;
+      if (state.activeTabId === id) state.dirty = true;
       if (!tab.draftId) tab.draftId = newDraftId();
     }
+    if (doc.path && opts && opts.draftId && window.margo.watchFile) {
+      try { window.margo.watchFile(doc.path); } catch {}
+    }
+    applySpellcheck(tab.pane);
     refreshHeader();
     paintTabs();
+    refreshSaveState(tab);
+    refreshStatusInfo(tab);
+    persistSession();
     scheduleThumb();
+    return tab;
   }
   const mountDoc = (doc) => openInTab(doc);
-  async function closeTab(id) {
-    const t = findTab(id);
-    if (!t) return;
-    if (t.dirty) {
-      await activateTab(t.id);
-      if (!(await resolveDirty())) return;
-      t.dirty = state.dirty;
-    }
-    await clearDraft(t);
-    const idx = state.tabs.findIndex((x) => x.id === id);
-    const wasActive = state.activeTabId === id;
-    if (t.editor && typeof t.editor.destroy === 'function') {
-      try { t.editor.destroy(); } catch {}
-    }
-    if (t.status && typeof t.status.destroy === 'function') {
-      try { t.status.destroy(); } catch {}
-    }
-    t.pane.remove();
-    state.tabs.splice(idx, 1);
-    if (wasActive) clearAliases();
-    if (!state.tabs.length) {
-      showLanding();
+
+  function rememberClosed(t) {
+    const p = t && t.doc && t.doc.path;
+    if (!p) return;
+    const key = pathKey(p);
+    state.closedPaths = state.closedPaths.filter((x) => pathKey(x) !== key);
+    state.closedPaths.push(p);
+    if (state.closedPaths.length > 12) state.closedPaths.shift();
+  }
+  async function reopenClosedTab() {
+    while (state.closedPaths.length) {
+      const p = state.closedPaths.pop();
+      if (findTabByPath(p)) continue;
+      await openFromPath(p);
       return;
     }
-    if (wasActive) {
-      const neighbor = state.tabs[Math.max(0, idx - 1)];
-      await activateTab(neighbor.id);
-    } else {
-      paintTabs();
-      refreshHeader();
+    toast('No recently closed documents');
+  }
+
+  async function closeTab(id, opts) {
+    syncActiveTab();
+    const t = findTab(id);
+    if (!t || t.closing) return false;
+    t.closing = true;
+    try {
+      if (t.dirty && !(opts && opts.discard)) {
+        await activateTab(t.id);
+        if (!(await resolveDirty())) return false;
+      }
+      await clearDraft(t);
+      if (!state.tabs.includes(t)) return true;
+      const idx = state.tabs.indexOf(t);
+      const wasActive = state.activeTabId === id;
+      discardTabChrome(t);
+      rememberClosed(t);
+      if (t.doc && t.doc.path && window.margo.unwatchFile && !findOtherTabByPath(t)) {
+        try { window.margo.unwatchFile(t.doc.path); } catch {}
+      }
+      state.tabs.splice(idx, 1);
+      if (state.lastActiveTabId === id) state.lastActiveTabId = null;
+      if (wasActive) clearAliases();
+      persistSession();
+      if (!state.tabs.length) {
+        showLanding();
+        return true;
+      }
+      if (wasActive) {
+        const neighbor = state.tabs[Math.max(0, idx - 1)];
+        await activateTab(neighbor.id);
+      } else {
+        paintTabs();
+        refreshHeader();
+      }
+      return true;
+    } finally {
+      t.closing = false;
     }
+  }
+  function findOtherTabByPath(t) {
+    const key = pathKey(t.doc && t.doc.path);
+    return state.tabs.find((x) => x !== t && x.doc && pathKey(x.doc.path) === key) || null;
   }
   function closeActiveTab() {
     if (state.view === 'editor' && state.activeTabId) return closeTab(state.activeTabId);
   }
+  async function closeOtherTabs(keepId) {
+    for (const t of [...state.tabs]) {
+      if (t.id === keepId) continue;
+      if (!(await closeTab(t.id))) return;
+    }
+    const keep = findTab(keepId);
+    if (keep) activateTab(keep.id);
+  }
+  async function closeTabsToRight(id) {
+    const i = state.tabs.findIndex((t) => t.id === id);
+    if (i < 0) return;
+    for (const t of state.tabs.slice(i + 1)) {
+      if (!(await closeTab(t.id))) return;
+    }
+  }
+  async function closeAllTabs() {
+    for (const t of [...state.tabs]) {
+      if (!(await closeTab(t.id))) return false;
+    }
+    return true;
+  }
   function cycleTabs(dir) {
     if (!state.tabs.length) return;
+    /* From the home screen, Ctrl+Tab goes back to the document that was in
+       front - it used to count from the first tab and skip it. */
+    if (state.view !== 'editor' || !state.activeTabId) {
+      const back = findTab(state.lastActiveTabId) || state.tabs[0];
+      activateTab(back.id);
+      return;
+    }
     const i = state.tabs.findIndex((t) => t.id === state.activeTabId);
     const start = i < 0 ? 0 : i;
     const next = (start + dir + state.tabs.length) % state.tabs.length;
     activateTab(state.tabs[next].id);
   }
+  function activateTabAt(n) {
+    const t = n === 9 ? state.tabs[state.tabs.length - 1] : state.tabs[n - 1];
+    if (t) activateTab(t.id);
+  }
   function resetSession() {
     for (const t of [...state.tabs]) {
       cancelDraftTimer(t);
-      if (t.editor && typeof t.editor.destroy === 'function') {
-        try { t.editor.destroy(); } catch {}
-      }
-      if (t.status && typeof t.status.destroy === 'function') {
-        try { t.status.destroy(); } catch {}
-      }
-      t.pane.remove();
+      discardTabChrome(t);
     }
     state.tabs = [];
+    state.lastActiveTabId = null;
     clearAliases();
     document.body.classList.remove('margo-focus-mode');
     state.view = 'home';
@@ -862,6 +1470,58 @@
     paintTabs();
     refreshHeader();
     loadRecents();
+  }
+
+  /* Swaps a tab's document for a fresh copy read from disk, in place: same
+     tab, same position, new editor. */
+  async function reloadTabFromDisk(t, ask) {
+    if (!t || !t.doc || !t.doc.path) return false;
+    if (ask && t.dirty) {
+      const ok = await confirmModal('Reload from disk?',
+        `Discard your unsaved changes to ${t.doc.name} and load the version on disk?`, { confirmLabel: 'Reload' });
+      if (!ok) return false;
+    }
+    const res = await window.margo.openPath(t.doc.path);
+    if (!res || !res.ok) {
+      toast((res && res.error) || 'Could not reload the file', 'error');
+      return false;
+    }
+    const wasActive = state.activeTabId === t.id;
+    cancelDraftTimer(t);
+    await clearDraft(t);
+    const nextSibling = t.pane.nextSibling;
+    discardTabChrome(t);
+    const chrome = createPane(t.id, nextSibling);
+    Object.assign(t, {
+      doc: res.doc,
+      dirty: false,
+      editor: null,
+      pane: chrome.pane,
+      toolbar: chrome.toolbar,
+      host: chrome.host,
+      statusLeft: chrome.statusLeft,
+      statusRight: chrome.statusRight,
+      status: chrome.status,
+      savedAt: Date.now(),
+      autoSaved: false,
+      saveError: false
+    });
+    if (wasActive) {
+      applyTabAliases(t);
+      chrome.pane.hidden = state.view !== 'editor';
+    }
+    try {
+      await mountEditor(t, res.doc);
+    } catch (err) {
+      toast((err && err.message) || 'Could not reload the file', 'error');
+    }
+    if (wasActive) state.dirty = false;
+    applySpellcheck(t.pane);
+    paintTabs();
+    refreshHeader();
+    refreshSaveState(t);
+    refreshStatusInfo(t);
+    return true;
   }
 
   function applyViewMode() {
@@ -884,7 +1544,18 @@
     applyViewMode();
     paintTabs();
     refreshHeader();
+    paintGreeting();
     loadRecents();
+  }
+
+  function blankDoc(kind) {
+    if (kind === 'md') return { kind: 'md', name: 'Untitled.md', path: null, markdown: '' };
+    if (kind === 'doc') return { kind: 'doc', name: 'Untitled.docx', path: null, html: '<p></p>', notes: [] };
+    if (kind === 'sheet') return { kind: 'sheet', name: 'Untitled.xlsx', path: null, sheets: [{ name: 'Sheet1', rows: [] }], active: 0 };
+    const factory = window.MargoEditors && window.MargoEditors[kind];
+    if (factory && typeof factory.blankDoc === 'function') return factory.blankDoc();
+    if (kind === 'slides' && factory) return { kind: 'slides', name: 'Untitled.pptx', path: null, slides: [] };
+    return null;
   }
 
   async function newDoc(kind) {
@@ -897,53 +1568,280 @@
         return;
       }
     }
-    const templates = {
-      md: { kind: 'md', name: 'Untitled.md', path: null, markdown: '' },
-      doc: { kind: 'doc', name: 'Untitled.docx', path: null, html: '<p></p>', notes: [] },
-      sheet: { kind: 'sheet', name: 'Untitled.xlsx', path: null, sheets: [{ name: 'Sheet1', rows: [] }], active: 0 }
-    };
-    return openInTab(templates[kind]);
+    const doc = blankDoc(kind);
+    if (!doc) {
+      toast('Margo cannot create that kind of document here.', 'error');
+      return;
+    }
+    return openInTab(doc);
+  }
+
+  /* ---------------- templates ----------------
+     Real starting documents, each built for the editor it opens in. */
+  function longDate() {
+    return new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  const P = (w, cls) => `<span class="tpl-l${cls ? ' ' + cls : ''}" style="width:${w}%"></span>`;
+  const H = (w, cls) => `<span class="tpl-h${cls ? ' ' + cls : ''}" style="width:${w}%"></span>`;
+  const GAP = '<span class="tpl-gap"></span>';
+  const TEMPLATES = [
+    {
+      id: 'letter',
+      label: 'Letter',
+      kind: 'doc',
+      meta: 'Word document',
+      icon: 'letter',
+      preview: () =>
+        `<div class="tpl-page">${P(34, 'soft')}${P(28, 'soft')}${P(30, 'soft')}${GAP}${P(26)}${GAP}${P(40)}${GAP}${P(92)}${P(88)}${P(95)}${P(60)}${GAP}${P(90)}${P(84)}</div>`,
+      build: () => ({
+        kind: 'doc',
+        name: 'Letter.docx',
+        path: null,
+        notes: [],
+        html: [
+          '<p style="text-align: right;"><strong>Your Name</strong><br>123 Main Street<br>City, State 00000<br>you@example.com · (555) 010-0000</p>',
+          `<p>${escapeHtml(longDate())}</p>`,
+          '<p>Recipient Name<br>Title<br>Company<br>Street address<br>City, State 00000</p>',
+          '<p>Dear Recipient Name,</p>',
+          '<p>I am writing to let you know about… Start with a sentence that says why you are writing, so the reader knows what the letter is about from the first line.</p>',
+          '<p>Use the middle paragraphs for the details: what happened, what you are asking for, and any dates or numbers the reader will need. Keep each paragraph to one idea.</p>',
+          '<p>Close by saying what you would like to happen next and how the reader can reach you. Thank you for your time and consideration.</p>',
+          '<p>Sincerely,</p>',
+          '<p><br></p>',
+          '<p>Your Name</p>'
+        ].join('')
+      })
+    },
+    {
+      id: 'resume',
+      label: 'Resume',
+      kind: 'doc',
+      meta: 'Word document',
+      icon: 'resume',
+      preview: () =>
+        `<div class="tpl-page"><div class="tpl-row"><span class="tpl-avatar"></span><span style="flex:1;display:flex;flex-direction:column;gap:4px">${H(70)}${P(50, 'soft')}</span></div>${GAP}${H(34, 'sm tpl-accent')}${P(94)}${P(80)}${GAP}${H(40, 'sm tpl-accent')}${P(60)}${P(90)}${P(86)}${GAP}${H(30, 'sm tpl-accent')}${P(70)}</div>`,
+      build: () => ({
+        kind: 'doc',
+        name: 'Resume.docx',
+        path: null,
+        notes: [],
+        html: [
+          '<h1>Your Name</h1>',
+          '<p>City, State · you@example.com · (555) 010-0000 · linkedin.com/in/yourname</p>',
+          '<h2>Summary</h2>',
+          '<p>Two or three sentences on who you are, what you are good at and the kind of work you are looking for.</p>',
+          '<h2>Experience</h2>',
+          '<h3>Job Title — Company Name</h3>',
+          '<p><em>Month 20XX – Present · City, State</em></p>',
+          '<ul><li>Led a project that achieved a measurable result (numbers help).</li><li>Improved a process, saving time or money for the team.</li><li>Worked with people across teams to ship something that mattered.</li></ul>',
+          '<h3>Previous Job Title — Company Name</h3>',
+          '<p><em>Month 20XX – Month 20XX · City, State</em></p>',
+          '<ul><li>An accomplishment written as an action and its result.</li><li>Another accomplishment, most relevant ones first.</li></ul>',
+          '<h2>Education</h2>',
+          '<p><strong>Degree, Field of Study</strong> — University Name, 20XX</p>',
+          '<h2>Skills</h2>',
+          '<ul><li>Skill one · Skill two · Skill three</li><li>Tools and languages you know well</li></ul>'
+        ].join('')
+      })
+    },
+    {
+      id: 'meeting',
+      label: 'Meeting notes',
+      kind: 'doc',
+      meta: 'Word document',
+      icon: 'meeting',
+      preview: () =>
+        `<div class="tpl-page">${H(64)}${P(40, 'soft')}${GAP}${H(26, 'sm')}<div class="tpl-row"><span class="tpl-dot"></span>${P(70)}</div><div class="tpl-row"><span class="tpl-dot"></span>${P(60)}</div>${GAP}${H(30, 'sm')}<div class="tpl-row"><span class="tpl-box"></span>${P(60)}</div><div class="tpl-row"><span class="tpl-box"></span>${P(72)}</div></div>`,
+      build: () => ({
+        kind: 'doc',
+        name: 'Meeting notes.docx',
+        path: null,
+        notes: [],
+        html: [
+          '<h1>Meeting notes</h1>',
+          `<p><strong>Date:</strong> ${escapeHtml(longDate())}<br><strong>Time:</strong> 10:00 – 10:30<br><strong>Location:</strong> Room / video link<br><strong>Attendees:</strong> Name, Name, Name</p>`,
+          '<h2>Agenda</h2>',
+          '<ol><li>Updates since last meeting</li><li>Main topic for discussion</li><li>Next steps</li></ol>',
+          '<h2>Notes</h2>',
+          '<ul><li>Key point that was raised.</li><li>Questions and answers worth remembering.</li></ul>',
+          '<h2>Decisions</h2>',
+          '<ul><li>What was agreed, and why.</li></ul>',
+          '<h2>Action items</h2>',
+          '<table style="width: 100%; border-collapse: collapse;"><tbody>',
+          '<tr><th style="border: 1px solid #c8c8c8; padding: 6px; text-align: left;">Task</th><th style="border: 1px solid #c8c8c8; padding: 6px; text-align: left;">Owner</th><th style="border: 1px solid #c8c8c8; padding: 6px; text-align: left;">Due</th></tr>',
+          '<tr><td style="border: 1px solid #c8c8c8; padding: 6px;">Send the summary to everyone</td><td style="border: 1px solid #c8c8c8; padding: 6px;">Name</td><td style="border: 1px solid #c8c8c8; padding: 6px;">Friday</td></tr>',
+          '<tr><td style="border: 1px solid #c8c8c8; padding: 6px;">Follow up on open questions</td><td style="border: 1px solid #c8c8c8; padding: 6px;">Name</td><td style="border: 1px solid #c8c8c8; padding: 6px;">Next meeting</td></tr>',
+          '</tbody></table>',
+          '<p><br></p>'
+        ].join('')
+      })
+    },
+    {
+      id: 'budget',
+      label: 'Budget',
+      kind: 'sheet',
+      meta: 'Spreadsheet',
+      icon: 'budget',
+      preview: () => {
+        const cells = [];
+        cells.push('<span class="head"></span><span class="head"></span><span class="head"></span>');
+        for (let i = 0; i < 7; i++) cells.push('<span></span><span></span><span></span>');
+        cells.push('<span class="total"></span><span class="total"></span><span class="total"></span>');
+        return `<div class="tpl-page">${H(52)}${GAP}<div class="tpl-grid">${cells.join('')}</div></div>`;
+      },
+      build: () => {
+        const cats = [
+          ['Rent / mortgage', 1200, 1200], ['Utilities', 180, 164], ['Groceries', 450, 482],
+          ['Transport', 160, 140], ['Insurance', 120, 120], ['Eating out', 150, 188],
+          ['Entertainment', 80, 65], ['Savings', 400, 400], ['Other', 100, 72]
+        ];
+        const rows = [
+          ['Monthly budget', '', '', ''],
+          ['', '', '', ''],
+          ['Category', 'Planned', 'Actual', 'Difference']
+        ];
+        const first = rows.length + 1; // 1-based row of the first category
+        cats.forEach(([name, plan, actual], i) => {
+          const r = first + i;
+          rows.push([name, String(plan), String(actual), `=B${r}-C${r}`]);
+        });
+        const last = first + cats.length - 1;
+        const totalRow = last + 1;
+        rows.push(['Total', `=SUM(B${first}:B${last})`, `=SUM(C${first}:C${last})`, `=SUM(D${first}:D${last})`]);
+        rows.push(['', '', '', '']);
+        const incomeRow = totalRow + 2;
+        rows.push(['Income', '3200', '', '']);
+        rows.push(['Left over', `=B${incomeRow}-C${totalRow}`, '', '']);
+        const styles = {};
+        styles['0,0'] = { bold: true, size: 16 };
+        for (let c = 0; c < 4; c++) {
+          styles[`2,${c}`] = { bold: true, fill: '#d9ead3', align: c ? 'right' : 'left' };
+          styles[`${totalRow - 1},${c}`] = { bold: true, fill: '#f3f3f3', format: c ? 'currency' : undefined };
+        }
+        for (let r = first - 1; r < last; r++) {
+          for (let c = 1; c < 4; c++) styles[`${r},${c}`] = { format: 'currency' };
+        }
+        styles[`${incomeRow - 1},0`] = { bold: true };
+        styles[`${incomeRow - 1},1`] = { format: 'currency' };
+        styles[`${incomeRow},0`] = { bold: true };
+        styles[`${incomeRow},1`] = { bold: true, format: 'currency', fill: '#fff2cc' };
+        Object.keys(styles).forEach((k) => {
+          Object.keys(styles[k]).forEach((p) => { if (styles[k][p] === undefined) delete styles[k][p]; });
+        });
+        return {
+          kind: 'sheet',
+          name: 'Budget.xlsx',
+          path: null,
+          active: 0,
+          sheets: [{ name: 'Budget', rows, styles, colWidths: { 0: 180, 1: 110, 2: 110, 3: 110 }, rowHeights: {}, charts: [] }]
+        };
+      }
+    },
+    {
+      id: 'todo',
+      label: 'To-do list',
+      kind: 'md',
+      meta: 'Markdown note',
+      icon: 'todo',
+      preview: () =>
+        `<div class="tpl-page">${H(46)}${GAP}<div class="tpl-row"><span class="tpl-box done"></span>${P(58)}</div><div class="tpl-row"><span class="tpl-box"></span>${P(76)}</div><div class="tpl-row"><span class="tpl-box"></span>${P(64)}</div>${GAP}${H(30, 'sm')}<div class="tpl-row"><span class="tpl-box"></span>${P(70)}</div><div class="tpl-row"><span class="tpl-box"></span>${P(52)}</div></div>`,
+      build: () => ({
+        kind: 'md',
+        name: 'To-do list.md',
+        path: null,
+        markdown: [
+          '# To-do list',
+          '',
+          `_${longDate()}_`,
+          '',
+          '## Today',
+          '',
+          '- [x] Write the list',
+          '- [ ] Reply to the messages that need an answer',
+          '- [ ] Finish the most important task first',
+          '',
+          '## This week',
+          '',
+          '- [ ] Plan next week',
+          '- [ ] Book the appointment',
+          '',
+          '## Someday',
+          '',
+          '- [ ] Something worth doing when there is time',
+          ''
+        ].join('\n')
+      })
+    }
+  ];
+  async function newFromTemplate(id) {
+    const tpl = TEMPLATES.find((t) => t.id === id);
+    if (!tpl) return null;
+    if (!kindAvailable(tpl.kind)) {
+      toast('That template needs an editor this build does not include.', 'error');
+      return null;
+    }
+    const tab = await openInTab(tpl.build());
+    closeSidebar(true);
+    return tab;
   }
 
   /* ---------------- thumbnails ---------------- */
   let thumbTimer = null;
-  async function refreshLibraryThumb(data) {
-    if (!state.doc?.path || state.doc.kind === 'md') return;
+  async function refreshLibraryThumbFor(doc, data) {
+    if (!doc || !doc.path || doc.kind === 'md') return;
     try {
-      const url = await window.MargoThumbs.generate(state.doc, data);
-      if (url) applyThumbToLibrary(state.doc.path, url);
+      const url = await window.MargoThumbs.generate(doc, data);
+      if (url) applyThumbToLibrary(doc.path, url);
     } catch {}
   }
+  async function refreshLibraryThumb(data) {
+    return refreshLibraryThumbFor(state.doc, data);
+  }
+  /* Bound to the tab that asked: the timer used to read whichever document
+     was in front when it fired, which after a quick tab switch was another
+     file's contents under this file's thumbnail. */
   function scheduleThumb() {
     clearTimeout(thumbTimer);
-    if (!state.doc || !state.doc.path || state.doc.kind === 'md') return;
+    const t = findTab(state.activeTabId);
+    if (!t || !t.doc || !t.doc.path || t.doc.kind === 'md') return;
     thumbTimer = setTimeout(async () => {
+      if (!state.tabs.includes(t) || !t.editor) return;
       try {
-        const data = state.editor && state.editor.kind !== 'pdf'
-          ? await Promise.resolve(state.editor.getData())
-          : null;
-        await refreshLibraryThumb(data);
+        const data = t.doc.kind !== 'pdf' ? await Promise.resolve(t.editor.getData()) : null;
+        await refreshLibraryThumbFor(t.doc, data);
       } catch {}
     }, 350);
   }
 
   /* ---------------- open / save ---------------- */
+  const OPENABLE_EXTS = ['md', 'markdown', 'txt', 'docx', 'xlsx', 'csv', 'pdf'];
+  function extOf(p) {
+    const m = /\.([^.\\/]+)$/.exec(String(p || ''));
+    return m ? m[1].toLowerCase() : '';
+  }
   async function openFromPath(p) {
     const existing = findTabByPath(p);
     if (existing) {
       await activateTab(existing.id);
       closeSidebar(true);
-      return;
+      return existing;
     }
     const res = await window.margo.openPath(p);
-    if (!res.ok) {
-      toast(res.error || 'Could not open file', 'error');
+    if (!res || !res.ok) {
+      toast((res && res.error) || 'Could not open file', 'error');
       window.margo.recents.remove(p);
       loadRecents();
-      return;
+      return null;
     }
-    await openInTab(res.doc);
+    let tab = null;
+    try {
+      tab = await openInTab(res.doc);
+    } catch (err) {
+      toast((err && err.message) || 'Could not open file', 'error');
+      return null;
+    }
     closeSidebar(true);
+    return tab;
   }
 
   async function newDocGuarded(kind) {
@@ -965,7 +1863,7 @@
     });
     if (res.canceled) return false;
     if (!res.ok) { toast(res.error || 'Export failed', 'error'); return false; }
-    toast(`Exported to ${res.path.split(/[\\/]/).pop()}`);
+    toast(`Exported to ${res.path.split(/[\\/]/).pop()}`, 'success');
     loadRecents();
     return true;
   }
@@ -1012,76 +1910,161 @@
     if (kind === 'md') return ['md', 'markdown', 'txt'].includes(ext);
     if (kind === 'doc') return ext === 'docx';
     if (kind === 'pdf') return ext === 'pdf';
+    if (kind === 'slides') return ext === 'pptx';
     return ext === 'xlsx' || ext === 'csv';
   };
 
-  async function afterLocalSave(toPath, fileName, fromPath) {
+  async function afterLocalSave(toPath, fileName, fromPath, quiet) {
     try {
       const drive = await window.margo.google.push({
         path: toPath,
         name: fileName,
         fromPath: fromPath || toPath
       });
+      if (quiet) return;
       if (drive && drive.pushed) {
-        toast('Saved locally and on Drive');
+        toast('Saved locally and on Drive', 'success');
         return;
       }
-      toast('Saved');
+      toast('Saved', 'success');
       if (drive && drive.ok === false) toast(drive.error || 'Could not update Drive', 'error');
     } catch {
-      toast('Saved');
+      if (!quiet) toast('Saved', 'success');
     }
   }
 
-  async function saveDoc(forceDialog) {
-    if (!state.doc || !state.editor) return false;
-    const data = await Promise.resolve(state.editor.getData());
-    const { kind, path, name } = state.doc;
-    let thumbDataUrl = null;
-    if (kind === 'doc' || kind === 'md') {
-      try { thumbDataUrl = await window.MargoThumbs.jpegForDoc(state.doc, data); } catch {}
+  /* Marks a tab clean after a save - unless it was edited while the save was
+     in flight. The snapshot written to disk predates those edits, and
+     clearing the flag anyway (which is what happened) let the next close
+     throw them away without asking. */
+  async function finishSaved(t, data, gen, auto) {
+    const clean = (t.editGen || 0) === gen;
+    if (clean) {
+      t.dirty = false;
+      if (state.activeTabId === t.id) state.dirty = false;
     }
+    if (t.editor && t.editor.onSaved) {
+      try { await Promise.resolve(t.editor.onSaved(data)); } catch {}
+    }
+    t.savedAt = Date.now();
+    t.autoSaved = !!auto;
+    t.saveError = false;
+    if (clean) await clearDraft(t);
+    paintTabs();
+    refreshHeader();
+    refreshSaveState(t);
+    return clean;
+  }
 
-    if (!forceDialog && path) {
-      const res = await window.margo.save({ kind, path, data, thumbDataUrl });
+  /* Saves one tab, in front or not. opts: { forceDialog, auto }.
+     A second save of the same tab while one is running joins it instead of
+     racing it to the disk (Ctrl+S twice used to open two Save As dialogs). */
+  async function saveTab(t, opts) {
+    const o = opts || {};
+    if (!t || !t.doc || !t.editor) return false;
+    if (state.activeTabId === t.id) syncActiveTab();
+    if (t.saving) return t.saving;
+    const run = (async () => {
+      const doc = t.doc;
+      const gen = t.editGen || 0;
+      const data = await Promise.resolve(t.editor.getData());
+      const { kind, path, name } = doc;
+      let thumbDataUrl = null;
+      if (kind === 'doc' || kind === 'md') {
+        try { thumbDataUrl = await window.MargoThumbs.jpegForDoc(doc, data); } catch {}
+      }
+
+      if (!o.forceDialog && path) {
+        const res = await window.margo.save({ kind, path, data, thumbDataUrl });
+        if (!res || !res.ok) {
+          t.saveError = true;
+          toast(((res && res.error) || 'Save failed') + (o.auto ? ' (autosave)' : ''), 'error');
+          return false;
+        }
+        await finishSaved(t, data, gen, !!o.auto);
+        await afterLocalSave(path, name, path, !!o.auto);
+        await refreshLibraryThumbFor(doc, data);
+        return true;
+      }
+      if (o.auto) return false;
+
+      const res = await window.margo.saveAs({ kind, data, suggestedName: name, currentPath: path, thumbDataUrl });
+      if (res.canceled) return false;
       if (!res.ok) { toast(res.error || 'Save failed', 'error'); return false; }
-      state.dirty = false;
-      if (state.editor.onSaved) await Promise.resolve(state.editor.onSaved(data));
-      syncActiveTab();
-      await clearDraft(findTab(state.activeTabId));
-      paintTabs();
-      refreshHeader();
-      await afterLocalSave(path, name, path);
-      await refreshLibraryThumb(data);
+
+      const ext = res.path.split('.').pop();
+      if (sameKindExt(kind, ext)) {
+        const fromPath = path;
+        doc.path = res.path;
+        doc.name = res.path.split(/[\\/]/).pop();
+        await finishSaved(t, data, gen, false);
+        persistSession();
+        await afterLocalSave(res.path, doc.name, fromPath);
+        await refreshLibraryThumbFor(doc, data);
+      } else {
+        // cross-format export: file written, but the open buffer keeps its own format
+        toast(`Exported to ${res.path.split(/[\\/]/).pop()} — still editing the ${(KIND_LABEL[kind] || 'document').toLowerCase()}`);
+        loadRecents();
+      }
+      if (kind === 'sheet' && ext === 'csv' && (data.sheets || []).length > 1) {
+        toast('CSV contains the active sheet only');
+      }
       return true;
+    })();
+    t.saving = run;
+    refreshSaveState(t);
+    try {
+      return await run;
+    } catch (err) {
+      toast((err && err.message) || 'Save failed', 'error');
+      return false;
+    } finally {
+      t.saving = null;
+      refreshSaveState(t);
     }
+  }
+  async function saveDoc(forceDialog) {
+    return saveTab(findTab(state.activeTabId), { forceDialog: !!forceDialog });
+  }
+  async function saveAllTabs() {
+    syncActiveTab();
+    let n = 0;
+    for (const t of [...state.tabs]) {
+      if (!t.dirty) continue;
+      if (!t.doc.path) await activateTab(t.id);
+      if (await saveTab(t)) n += 1;
+      else if (!t.doc.path) break;
+    }
+    if (!n) toast('Nothing to save');
+  }
 
-    const res = await window.margo.saveAs({ kind, data, suggestedName: name, currentPath: path, thumbDataUrl });
-    if (res.canceled) return false;
-    if (!res.ok) { toast(res.error || 'Save failed', 'error'); return false; }
-
-    const ext = res.path.split('.').pop();
-    if (sameKindExt(kind, ext)) {
-      const fromPath = path;
-      state.doc.path = res.path;
-      state.doc.name = res.path.split(/[\\/]/).pop();
-      state.dirty = false;
-      if (state.editor.onSaved) await Promise.resolve(state.editor.onSaved(data));
-      syncActiveTab();
-      await clearDraft(findTab(state.activeTabId));
-      paintTabs();
-      refreshHeader();
-      await afterLocalSave(res.path, state.doc.name, fromPath);
-      await refreshLibraryThumb(data);
-    } else {
-      // cross-format export: file written, but the open buffer keeps its own format
-      toast(`Exported to ${res.path.split(/[\\/]/).pop()} — still editing the ${KIND_LABEL[kind].toLowerCase()}`);
-      loadRecents();
+  /* ---------------- autosave ----------------
+     Only documents that already live in a file, and never PDFs (saving one
+     flattens its signatures and stamps into the page) or CSVs (a CSV holds
+     one sheet, so a background save could drop the others). */
+  let autosaveTimer = null;
+  function autosaveEligible(t) {
+    if (!t || !t.doc || !t.doc.path) return false;
+    if (t.doc.kind === 'pdf') return false;
+    const ext = extOf(t.doc.path);
+    if (ext === 'csv') return false;
+    return sameKindExt(t.doc.kind, ext);
+  }
+  function restartAutosave() {
+    clearInterval(autosaveTimer);
+    autosaveTimer = null;
+    if (!settings.autosave) return;
+    autosaveTimer = setInterval(runAutosave, settings.autosaveSec * 1000);
+  }
+  async function runAutosave() {
+    if (!settings.autosave) return 0;
+    syncActiveTab();
+    let saved = 0;
+    for (const t of [...state.tabs]) {
+      if (!t.dirty || t.saving || t.closing || !autosaveEligible(t)) continue;
+      if (await saveTab(t, { auto: true })) saved += 1;
     }
-    if (kind === 'sheet' && ext === 'csv' && (data.sheets || []).length > 1) {
-      toast('CSV contains the active sheet only');
-    }
-    return true;
+    return saved;
   }
 
   /* returns true when it's OK to discard the current buffer */
@@ -1108,13 +2091,14 @@
 
   /* ---------------- sidebar recents ---------------- */
   const EXT_STYLE = {
-    md: 'MD', markdown: 'MD', txt: 'TXT', docx: 'DOC', xlsx: 'XLS', csv: 'CSV', html: 'HTM', pdf: 'PDF'
+    md: 'MD', markdown: 'MD', txt: 'TXT', docx: 'DOCX', xlsx: 'XLSX', csv: 'CSV', html: 'HTM', pdf: 'PDF', pptx: 'PPTX'
   };
   const EXT_ICON = {
     md: 'md', markdown: 'md', txt: 'md',
     docx: 'doc',
     xlsx: 'sheet', csv: 'sheet',
-    pdf: 'pdf'
+    pdf: 'pdf',
+    pptx: 'slides'
   };
   const THUMB_EXTS = new Set(['docx', 'pdf', 'xlsx', 'csv']);
   function recentWantsContentThumb(r) {
@@ -1205,104 +2189,281 @@
     g.textContent = EXT_STYLE[r.ext] || '?';
     thumb.appendChild(g);
   }
-  function attachRecentRemove(el, r) {
-    const rm = document.createElement('span');
-    rm.className = el.classList.contains('home-tile-cover') ? 'home-tile-remove' : 'recent-remove';
-    rm.innerHTML = window.MargoIcons.close;
-    rm.title = 'Remove from list';
-    rm.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await window.margo.recents.remove(r.path);
-      loadRecents();
-    });
-    el.appendChild(rm);
+  /* ---- pinned files (favourites), kept per install ---- */
+  const PINNED_KEY = 'margo.pinned';
+  function readPinned() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PINNED_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter((p) => p && typeof p.path === 'string') : [];
+    } catch { return []; }
   }
+  let pinned = readPinned();
+  function isPinned(p) {
+    const key = pathKey(p);
+    return pinned.some((x) => pathKey(x.path) === key);
+  }
+  function togglePin(p, name) {
+    if (!p) return;
+    const key = pathKey(p);
+    if (isPinned(p)) {
+      pinned = pinned.filter((x) => pathKey(x.path) !== key);
+      toast(`Unpinned ${name || baseName(p)}`);
+    } else {
+      pinned.unshift({ path: p, name: name || baseName(p), ext: extOf(p), ts: Date.now() });
+      toast(`Pinned ${name || baseName(p)} to the library`, 'success');
+    }
+    try { localStorage.setItem(PINNED_KEY, JSON.stringify(pinned)); } catch {}
+    renderLibrary();
+  }
+  function baseName(p) {
+    return String(p || '').split(/[\\/]/).pop();
+  }
+  /* A pinned file borrows the recents entry (and so its thumbnail) when it
+     has one. */
+  function pinnedEntries() {
+    const byKey = new Map(lastRecents.map((r) => [pathKey(r.path), r]));
+    return pinned.map((p) => byKey.get(pathKey(p.path)) || { path: p.path, name: p.name || baseName(p.path), ext: p.ext || extOf(p.path), ts: p.ts || 0 });
+  }
+
+  function recentKind(r) {
+    return EXT_ICON[r.ext] || null;
+  }
+  function matchesQuery(r, q) {
+    if (!q) return true;
+    const hay = (r.name + ' ' + r.path).toLowerCase();
+    return q.split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
+  }
+
   function markActiveRecent() {
     const current = state.doc && state.doc.path ? state.doc.path.toLowerCase() : null;
     document.querySelectorAll('.recent-card, .home-tile').forEach((c) => {
       c.classList.toggle('active', !!current && c.dataset.path === current);
     });
   }
+
+  function recentContextMenu(r, x, y) {
+    const pinnedNow = isPinned(r.path);
+    window.MargoMenubar.contextMenu(x, y, [
+      { label: 'Open', icon: ICONS.open, action: () => openFromPath(r.path) },
+      { label: pinnedNow ? 'Unpin' : 'Pin to library', icon: pinnedNow ? ICONS.starFilled : ICONS.star, action: () => togglePin(r.path, r.name) },
+      { label: 'Copy file path', icon: ICONS.copyPath, action: () => copyText(r.path, 'Path copied') },
+      { sep: true },
+      { label: 'Remove from recents', icon: ICONS.close, action: async () => {
+        await window.margo.recents.remove(r.path);
+        loadRecents();
+      } }
+    ]);
+  }
+
+  /* Star + remove, as spans with button roles: the card itself is a button,
+     and a button inside a button is markup no browser agrees on. */
+  function recentActionButton(cls, icon, title, onClick) {
+    const b = document.createElement('span');
+    b.className = cls;
+    b.setAttribute('role', 'button');
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = icon;
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      onClick();
+    });
+    return b;
+  }
+  function attachRecentActions(host, r, tile) {
+    const wrap = document.createElement('span');
+    wrap.className = tile ? 'home-tile-actions' : 'recent-actions';
+    const on = isPinned(r.path);
+    const star = recentActionButton((tile ? 'home-tile-star' : 'recent-star') + (on ? ' on' : ''),
+      on ? ICONS.starFilled : ICONS.star, on ? 'Unpin' : 'Pin to library', () => togglePin(r.path, r.name));
+    if (on && tile) wrap.classList.add('has-on');
+    const rm = recentActionButton(tile ? 'home-tile-remove' : 'recent-remove', ICONS.close, 'Remove from list', async () => {
+      await window.margo.recents.remove(r.path);
+      if (isPinned(r.path) && !tile) togglePin(r.path, r.name);
+      loadRecents();
+    });
+    wrap.appendChild(star);
+    wrap.appendChild(rm);
+    host.appendChild(wrap);
+  }
+  /* kept for callers that only want the remove control */
+  function attachRecentRemove(el, r) {
+    attachRecentActions(el, r, el.classList.contains('home-tile-cover'));
+  }
+
   let lastRecents = [];
+  function sideCard(r) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'recent-card';
+    card.title = r.path;
+    card.dataset.path = r.path.toLowerCase();
+
+    const thumb = document.createElement('span');
+    thumb.className = 'recent-thumb';
+    fillRecentThumb(thumb, r);
+
+    const info = document.createElement('span');
+    info.className = 'recent-info';
+    const nm = document.createElement('span'); nm.className = 'recent-name'; nm.textContent = r.name;
+    const meta = document.createElement('span'); meta.className = 'recent-meta';
+    meta.textContent = r.ts ? `${EXT_STYLE[r.ext] || '?'} · ${timeAgo(r.ts)}` : (EXT_STYLE[r.ext] || '?');
+    info.appendChild(nm); info.appendChild(meta);
+
+    card.appendChild(thumb); card.appendChild(info);
+    attachRecentActions(card, r, false);
+    card.addEventListener('click', () => openFromPath(r.path));
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      recentContextMenu(r, e.clientX, e.clientY);
+    });
+    return card;
+  }
+  const GROUP_ORDER = [
+    ['doc', 'Documents'], ['sheet', 'Spreadsheets'], ['slides', 'Presentations'], ['md', 'Notes'], ['pdf', 'PDFs'], [null, 'Other']
+  ];
   function renderSidebarRecents(list) {
+    const q = (els.sideSearch && els.sideSearch.value || '').trim().toLowerCase();
     els.btnClearRecents.classList.toggle('hidden', !list.length);
+
+    const pins = pinnedEntries().filter((r) => matchesQuery(r, q));
+    els.sidePinned.innerHTML = '';
+    pins.forEach((r) => els.sidePinned.appendChild(sideCard(r)));
+    els.sidePinnedSection.classList.toggle('hidden', !pins.length);
+
     els.recentsList.innerHTML = '';
-    if (!list.length) {
+    const rest = list.filter((r) => !isPinned(r.path) && matchesQuery(r, q));
+    if (!rest.length) {
       const d = document.createElement('div');
       d.className = 'side-empty';
-      d.textContent = 'Files you open or save appear here, with a preview of their first page.';
+      d.textContent = q
+        ? `No files match “${q}”.`
+        : list.length ? 'Everything recent is pinned above.' : 'Files you open or save appear here.';
       els.recentsList.appendChild(d);
       return;
     }
-    list.forEach((r) => {
-      const card = document.createElement('button');
-      card.className = 'recent-card';
-      card.title = r.path;
-      card.dataset.path = r.path.toLowerCase();
-
-      const thumb = document.createElement('span');
-      thumb.className = 'recent-thumb';
-      fillRecentThumb(thumb, r);
-
-      const info = document.createElement('span');
-      info.className = 'recent-info';
-      const nm = document.createElement('span'); nm.className = 'recent-name'; nm.textContent = r.name;
-      const meta = document.createElement('span'); meta.className = 'recent-meta';
-      meta.textContent = `${EXT_STYLE[r.ext] || '?'} · ${timeAgo(r.ts)}`;
-      info.appendChild(nm); info.appendChild(meta);
-
-      card.appendChild(thumb); card.appendChild(info);
-      attachRecentRemove(card, r);
-      card.addEventListener('click', () => openFromPath(r.path));
-      els.recentsList.appendChild(card);
+    if (!settings.sideGroup) {
+      rest.forEach((r) => els.recentsList.appendChild(sideCard(r)));
+      return;
+    }
+    GROUP_ORDER.forEach(([kind, label]) => {
+      const items = rest.filter((r) => recentKind(r) === kind);
+      if (!items.length) return;
+      const head = document.createElement('div');
+      head.className = 'side-group-head';
+      head.innerHTML = kind ? ICONS[KIND_ICON[kind]] : ICONS.file;
+      const t = document.createElement('span');
+      t.textContent = label;
+      const n = document.createElement('span');
+      n.className = 'side-group-count';
+      n.textContent = String(items.length);
+      head.appendChild(t);
+      head.appendChild(n);
+      els.recentsList.appendChild(head);
+      items.forEach((r) => els.recentsList.appendChild(sideCard(r)));
     });
+  }
+
+  /* ---- home library ---- */
+  let homeFilter = 'all';
+  const HOME_FILTERS = [
+    ['all', 'All'], ['doc', 'Documents'], ['sheet', 'Sheets'], ['slides', 'Slides'], ['md', 'Notes'], ['pdf', 'PDFs']
+  ];
+  function paintHomeFilter(list) {
+    if (!els.homeFilter) return;
+    const present = new Set(list.map(recentKind));
+    els.homeFilter.innerHTML = '';
+    HOME_FILTERS.forEach(([id, label]) => {
+      if (id !== 'all' && !present.has(id) && homeFilter !== id) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.dataset.filter = id;
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', homeFilter === id ? 'true' : 'false');
+      b.classList.toggle('active', homeFilter === id);
+      b.addEventListener('click', () => {
+        homeFilter = id;
+        renderHomeTiles(lastRecents);
+      });
+      els.homeFilter.appendChild(b);
+    });
+    els.homeFilter.classList.toggle('hidden', present.size < 2 && homeFilter === 'all');
+  }
+  function homeTile(r) {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'home-tile';
+    tile.title = r.path;
+    tile.dataset.path = r.path.toLowerCase();
+
+    const cover = document.createElement('div');
+    cover.className = 'home-tile-cover';
+    fillRecentThumb(cover, r);
+
+    const badge = document.createElement('span');
+    badge.className = 'home-tile-badge ' + kindBadgeClass(r.ext);
+    badge.textContent = EXT_STYLE[r.ext] || '?';
+    cover.appendChild(badge);
+    attachRecentActions(cover, r, true);
+
+    const info = document.createElement('span');
+    info.className = 'home-tile-info';
+    const name = document.createElement('span');
+    name.className = 'home-tile-name';
+    name.textContent = r.name;
+    const meta = document.createElement('span');
+    meta.className = 'home-tile-meta';
+    meta.textContent = r.ts ? `Opened ${timeAgo(r.ts)}` : (EXT_STYLE[r.ext] || '');
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    tile.appendChild(cover);
+    tile.appendChild(info);
+    tile.addEventListener('click', () => openFromPath(r.path));
+    tile.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      recentContextMenu(r, e.clientX, e.clientY);
+    });
+    return tile;
   }
   function renderHomeTiles(list) {
     if (!els.homeTiles) return;
     els.btnClearHomeRecents.classList.toggle('hidden', !list.length);
+    paintHomeFilter(list);
+    const q = (els.homeSearch && els.homeSearch.value || '').trim().toLowerCase();
+    const pass = (r) => matchesQuery(r, q) && (homeFilter === 'all' || recentKind(r) === homeFilter);
+
+    const pins = pinnedEntries().filter(pass);
+    els.homePinned.innerHTML = '';
+    pins.forEach((r) => els.homePinned.appendChild(homeTile(r)));
+    els.homePinnedWrap.classList.toggle('hidden', !pins.length);
+
     els.homeTiles.innerHTML = '';
-    if (!list.length) {
+    const rest = list.filter((r) => !isPinned(r.path) && pass(r));
+    if (!rest.length) {
       const d = document.createElement('p');
       d.className = 'home-tiles-empty';
       d.id = 'home-tiles-empty';
-      d.textContent = 'Files you open or save appear here, with a preview of their first page.';
+      const filtered = q || homeFilter !== 'all';
+      d.innerHTML = filtered ? ICONS.search : ICONS.clock;
+      const s = document.createElement('span');
+      s.textContent = filtered
+        ? 'No recent files match this search.'
+        : pins.length ? 'Your other recent files will show up here.'
+          : 'Files you open or save appear here, with a preview of their first page.';
+      d.appendChild(s);
       els.homeTiles.appendChild(d);
       els.homeTilesEmpty = d;
       return;
     }
-    list.forEach((r) => {
-      const tile = document.createElement('button');
-      tile.type = 'button';
-      tile.className = 'home-tile';
-      tile.title = r.path;
-      tile.dataset.path = r.path.toLowerCase();
-
-      const cover = document.createElement('div');
-      cover.className = 'home-tile-cover';
-      fillRecentThumb(cover, r);
-
-      const badge = document.createElement('span');
-      badge.className = 'home-tile-badge ' + kindBadgeClass(r.ext);
-      badge.textContent = EXT_STYLE[r.ext] || '?';
-      cover.appendChild(badge);
-      attachRecentRemove(cover, r);
-
-      const info = document.createElement('span');
-      info.className = 'home-tile-info';
-      const name = document.createElement('span');
-      name.className = 'home-tile-name';
-      name.textContent = r.name;
-      const meta = document.createElement('span');
-      meta.className = 'home-tile-meta';
-      meta.textContent = `${EXT_STYLE[r.ext] || '?'} · ${timeAgo(r.ts)}`;
-      info.appendChild(name);
-      info.appendChild(meta);
-
-      tile.appendChild(cover);
-      tile.appendChild(info);
-      tile.addEventListener('click', () => openFromPath(r.path));
-      els.homeTiles.appendChild(tile);
-    });
+    rest.forEach((r) => els.homeTiles.appendChild(homeTile(r)));
+  }
+  function renderLibrary() {
+    renderSidebarRecents(lastRecents);
+    renderHomeTiles(lastRecents);
+    markActiveRecent();
   }
   /* Each cached thumbnail holds a blob alive until its URL is revoked, and
      nothing revoked the ones for files that had left the list - so clearing
@@ -1319,12 +2480,11 @@
   }
 
   async function loadRecents() {
-    const list = await window.margo.recents.list();
-    lastRecents = list;
-    pruneThumbUrls(list);
-    renderSidebarRecents(list);
-    renderHomeTiles(list);
-    markActiveRecent();
+    let list = [];
+    try { list = await window.margo.recents.list(); } catch {}
+    lastRecents = Array.isArray(list) ? list : [];
+    pruneThumbUrls(lastRecents);
+    renderLibrary();
     queueThumbBackfill(list);
   }
 
