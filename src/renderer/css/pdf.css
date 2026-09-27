@@ -1,0 +1,116 @@
+/* ============ pdf viewer ============ */
+.pdf-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pdf-scroll {
+  flex: 1; overflow: auto; background: var(--bg-soft);
+  display: flex; flex-direction: column; align-items: center; gap: 22px;
+  padding: 26px 24px 56px;
+}
+.pdf-scroll.placing { cursor: crosshair; }
+.pdf-page {
+  position: relative; flex: none;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: var(--shadow-md);
+}
+.pdf-page canvas { display: block; border-radius: 3px; }
+.pdf-overlay { position: absolute; inset: 0; }
+/* Sits on the sheet itself, which is white in every theme, so it is coloured
+   against the page rather than against the app chrome. */
+.pdf-page-error {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 32px;
+  text-align: center; font-size: 12.5px; line-height: 1.55;
+  color: #9a4b44; background: #fff; border-radius: 3px;
+}
+.pdf-find-hit {
+  position: absolute;
+  background: rgba(253, 230, 138, 0.55);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.pdf-find-hit.current {
+  background: rgba(245, 158, 11, 0.55);
+}
+.pdf-zoom-label {
+  min-width: 44px; text-align: center;
+  font-size: 12px; font-weight: 570; color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.sig-float, .sig-placed { position: absolute; }
+.sig-float {
+  cursor: move;
+  outline: 1.5px dashed var(--accent-strong);
+  outline-offset: 2px;
+  background: rgba(242, 180, 10, 0.06);
+}
+.sig-float img, .sig-placed img { width: 100%; height: 100%; display: block; user-select: none; }
+.sig-actions {
+  position: absolute; top: -30px; right: 0;
+  display: flex; gap: 4px;
+}
+.sig-actions button {
+  width: 24px; height: 24px; border-radius: 6px;
+  font-size: 12px; font-weight: 700;
+  box-shadow: var(--shadow-sm);
+}
+.sig-ok { background: var(--accent); color: var(--accent-ink); }
+.sig-no { background: var(--surface); color: var(--danger); border: 1px solid var(--border-strong); }
+.sig-handle {
+  position: absolute; right: -6px; bottom: -6px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--page);
+  cursor: nwse-resize;
+}
+.sig-placed .sig-no {
+  position: absolute; top: -10px; right: -10px;
+  width: 20px; height: 20px; border-radius: 50%;
+  font-size: 10px; display: none; align-items: center; justify-content: center;
+}
+.sig-placed:hover .sig-no { display: flex; }
+
+.sig-pad-hint { font-size: 12px; color: var(--text-soft); margin-bottom: 8px; }
+.sig-pad {
+  width: 100%; height: 170px;
+  background: #ffffff;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: crosshair; touch-action: none;
+  display: block;
+}
+.sig-clear { margin-top: 8px; }
+
+.pdf-images, .doc-images { min-height: 60px; font-size: 12.5px; color: var(--text-soft); }
+.doc-images-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-images-summary { font-size: 12.5px; font-weight: 550; color: var(--text); }
+.pdf-images-grid, .doc-images-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px; max-height: 52vh; overflow-y: auto; padding: 2px;
+}
+.pdf-image-item, .doc-image-item {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.pdf-image-preview, .doc-image-preview {
+  height: 110px; display: flex; align-items: center; justify-content: center;
+  background: repeating-conic-gradient(var(--bg-softer) 0% 25%, var(--surface) 0% 50%) 0 0 / 16px 16px;
+  border-radius: 5px; overflow: hidden;
+}
+.doc-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.pdf-image-meta, .doc-image-meta { font-size: 10.5px; color: var(--text-faint); text-align: center; }
+.pdf-image-actions, .doc-image-actions { display: flex; gap: 6px; }
+.pdf-image-actions .btn, .doc-image-actions .btn { flex: 1; padding: 3px 6px; font-size: 11.5px; }
+
