@@ -1605,12 +1605,11 @@
       const chars = text.replace(/\n/g, '').length;
       const n = pages.length;
       statusCache = { words, chars, pages: n, page: Math.min(caretPageIndex(), n) };
-      const pagePart = n === 1 ? '1 page' : n + ' pages';
       const geom = `${(PAGE_SIZES[layout.size] || PAGE_SIZES.letter).label} · ${layout.orientation === 'landscape' ? 'Landscape' : 'Portrait'}`;
       statusDirty = false;
       // Word and character counts are the status bar's (commands.status());
       // this side carries what that line does not: the page setup.
-      ctx.setStatus(`${pagePart} · ${geom}`, 'Word document');
+      ctx.setStatus(geom, 'Word document');
       /* "Page N of M" only moves when pages are added or removed. Rewriting
          every header and footer on each status pass invalidated layout across
          the whole document, which forced the next measurement to reflow
@@ -5992,8 +5991,15 @@
       if (!isActiveTab() || modalOpen()) return;
       const pane = hostEl && (hostEl.closest('.tab-pane') || hostEl.parentElement);
       const t = e.target;
-      const inPane = !t || t === document.body || (pane && pane.contains(t)) || (ctx.toolbar && ctx.toolbar.contains(t));
+      const inPane = !t || t === document || t === document.body || (pane && pane.contains(t)) || (ctx.toolbar && ctx.toolbar.contains(t));
       if (!inPane) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.altKey && viewMode !== 'read') {
+        // Page break, from anywhere in this editor - and only this one.
+        e.preventDefault();
+        e.stopPropagation();
+        insertPageBreak();
+        return;
+      }
       if (e.key === 'Escape') {
         if (painter) { e.preventDefault(); stopPainter(); return; }
         if (selectedImg) { hideImageOverlay(); }
