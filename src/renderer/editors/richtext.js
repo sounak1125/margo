@@ -5749,9 +5749,9 @@
 
       /* ========== HOME ========== */
       const pHome = ribbonPanels.home;
-      let g = group(pHome, 'History');
-      btn(g, 'Undo', I.undo || DI.undo, () => undo(), { key: 'Ctrl+Z' });
-      btn(g, 'Redo', I.redo || DI.redo, () => redo(), { key: 'Ctrl+Y' });
+      // Undo and Redo live in the Edit menu and on Ctrl+Z / Ctrl+Y; the Home
+      // row keeps its width for formatting so it fits one row at 1280px.
+      let g = group(pHome, 'Clipboard');
       painterBtn = btn(g, 'Format painter — click to copy formatting once, double-click to keep painting', DI.painter, () => togglePainter(false));
       painterBtn.addEventListener('dblclick', () => { stopPainter(); togglePainter(true); });
 

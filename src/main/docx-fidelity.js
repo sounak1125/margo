@@ -188,6 +188,17 @@ function prepareDocxHtml(html, opts) {
     while ((tn = tw.nextNode())) if (tn.nodeValue.indexOf('\u200b') >= 0) tn.nodeValue = tn.nodeValue.replace(/\u200b/g, '');
   }
 
+  /* html-to-docx writes a font-family value into w:rFonts whole, so
+     "'Times New Roman', serif" became a font of that name. Word gets the
+     first family. */
+  q('[style*="font-family"]').forEach((el) => {
+    const ff = styleOf(el, 'font-family');
+    const first = ff.split(',')[0].replace(/["']/g, '').trim();
+    if (!first || /^(serif|sans-serif|monospace|system-ui|inherit)$/i.test(first)) el.style.removeProperty('font-family');
+    else el.style.setProperty('font-family', first);
+    if (!el.getAttribute('style')) el.removeAttribute('style');
+  });
+
   // Page breaks: html-to-docx only knows its own marker.
   q('div[data-margo-page-break]').forEach((el) => {
     const pb = doc.createElement('div');

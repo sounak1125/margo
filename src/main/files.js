@@ -109,9 +109,21 @@ function paragraphCss(p) {
   return css.join(';');
 }
 
+/* A font named in a Word file may not be installed here (Consolas on
+   Linux, Calibri on a Mac); without a generic family after it the browser
+   drew the text in its default serif, so a code block came out in Times. */
+const MONO_FONTS = /^(consolas|courier( new)?|cascadia (code|mono)|menlo|monaco|lucida console|source code pro|fira (code|mono)|jetbrains mono|dejavu sans mono|liberation mono|sf mono)$/i;
+const SERIF_FONTS = /^(times( new roman)?|georgia|cambria|garamond|palatino( linotype)?|book antiqua|baskerville|constantia|liberation serif|dejavu serif|noto serif)$/i;
+function fontStack(name) {
+  const f = String(name || '').replace(/[;"']/g, '').trim();
+  if (!f) return '';
+  const generic = MONO_FONTS.test(f) ? 'monospace' : SERIF_FONTS.test(f) ? 'serif' : 'sans-serif';
+  return (/\s/.test(f) ? '"' + f + '"' : f) + ', ' + generic;
+}
+
 function runCss(r) {
   const css = [];
-  if (r.font) css.push('font-family:' + String(r.font).replace(/[;"']/g, ''));
+  if (r.font) css.push('font-family:' + fontStack(r.font).replace(/"/g, "'"));
   if (r.fontSize) css.push('font-size:' + r.fontSize + 'pt');
   if (r.__margoColor) css.push('color:#' + r.__margoColor);
   if (r.__margoShade) css.push('background-color:#' + r.__margoShade);
