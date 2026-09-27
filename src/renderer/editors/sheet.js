@@ -2310,7 +2310,8 @@
   function toRangeObj(v) {
     if (!v) return null;
     if (typeof v === 'string') return parseA1Range(v);
-    if (typeof v.r1 === 'number') return { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
+    // Ranges end up in markup (rangeName), and a workbook's metadata sheet can say anything.
+    if ([v.r1, v.c1, v.r2, v.c2].every(Number.isInteger)) return { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
     return null;
   }
 
@@ -2774,7 +2775,8 @@
           }
         }
       }
-      return `<div class="${cls}" style="${css}"><span>${escapeHtml(text)}</span></div>`;
+      // Styles can come from a workbook's own XML or Margo's metadata sheet in it.
+      return `<div class="${escapeHtml(cls)}" style="${escapeHtml(css)}"><span>${escapeHtml(text)}</span></div>`;
     }
 
     function quadCells(rows, cols, ox, oy) {
@@ -4591,7 +4593,7 @@
           row.className = 'sheet-cf-rule';
           const label = (CF_TYPES.find(([v]) => v === rule.type) || [0, rule.type])[1];
           const sw = rule.type === 'scale' ? `linear-gradient(90deg, ${rule.minColor}, ${rule.maxColor})` : ((rule.style && rule.style.fill) || 'transparent');
-          row.innerHTML = `<span class="sheet-swatch" style="background:${sw}"></span><span>${rangeName(rule.range)} · ${escapeHtml(label)}${rule.v1 != null && rule.v1 !== '' ? ' ' + escapeHtml(rule.v1) : ''}${rule.type === 'between' ? ' – ' + escapeHtml(rule.v2 || '') : ''}</span>`;
+          row.innerHTML = `<span class="sheet-swatch" style="background:${escapeHtml(sw)}"></span><span>${escapeHtml(rangeName(rule.range))} · ${escapeHtml(label)}${rule.v1 != null && rule.v1 !== '' ? ' ' + escapeHtml(rule.v1) : ''}${rule.type === 'between' ? ' – ' + escapeHtml(rule.v2 || '') : ''}</span>`;
           const del = Object.assign(document.createElement('button'), { type: 'button', className: 'sheet-icon-btn', title: 'Delete rule', innerHTML: ICON('trash') });
           del.addEventListener('click', () => { mutate(() => { sheet().condFormats.splice(i, 1); }); paintList(); });
           row.appendChild(del);
@@ -5691,7 +5693,6 @@
       return { zone: 'cell', r: rowAtY(y), c: colAtX(x), x, y };
     }
 
-    let dragState = null;
     let autoScrollTimer = 0;
     function stopAutoScroll() { if (autoScrollTimer) { clearInterval(autoScrollTimer); autoScrollTimer = 0; } }
     function beginDrag(onMove, onUp) {
@@ -6324,8 +6325,6 @@
         setCell: (r, c, v) => { mutate(() => { putRaw(sheet(), r, c, normalizeEntry(v)); }); },
         getCell: (r, c) => getRaw(r, c),
         getFormatted: (r, c) => displayText(r, c),
-        getValue: (r, c) => { const v = display(r, c).value; return isErr(v) ? v.code : v; },
-        getStyle: (r, c) => getStyle(r, c),
         setColWidth: (c, w) => mutate(() => { sheet().colWidths[c] = w; }),
         getColWidth: (c) => colWidthRaw(c),
         setRowHeight: (r, h) => mutate(() => { sheet().rowHeights[r] = h; }),
@@ -6333,27 +6332,20 @@
         setFontSize: (size) => applyStyle({ size }),
         applyStyle: (patch) => applyStyle(patch),
         setNumFmt: (code) => setNumFmt(code),
-        addSheet: () => addSheet(),
-        switchSheet: (i) => switchSheet(i),
-        renameSheet: (i, n) => renameSheet(i, n),
         evalFormula: (expr, r, c) => { const v = scalar(engine.evaluate(expr, model.active, r || 0, c || 0), { val: engine.val, usedBounds: engine.usedBounds, sheet: model.active, r: r || 0, c: c || 0 }); return isErr(v) ? v.code : v; },
         select: (r, c) => select(r, c),
         selectRange: (r1, c1, r2, c2) => selectRange(r1, c1, r2, c2),
         recalcCount: () => recalcCount,
         autoSum: (fn) => autoSum(fn),
-        sortRange: (asc) => sortSelection(asc),
         sortRangeCells: (startR, endR, col, asc) => { selectRange(startR, col, endR, col); sortSelection(asc); },
         insertRows: (where) => insertRows(where),
-        insertCols: (where) => insertCols(where),
         deleteRows: () => deleteRows(),
-        deleteCols: () => deleteCols(),
         fill: (src, target) => fillRange(parseA1Range(src), parseA1Range(target)),
         merge: () => toggleMerge(),
         mergeAt: (r, c) => mergeAt(r, c),
         freeze: (r, c) => setFreeze(r, c),
         copy: (cut) => copySelection(!!cut),
         pasteInternal: (valuesOnly) => { if (clip) pasteInternal({ valuesOnly: !!valuesOnly }); },
-        pasteHtml: (html) => pasteData({ html, text: '' }),
         addCondFormat: (rule) => mutate(() => { sheet().condFormats.push({ ...rule, range: toRangeObj(rule.range) }); }),
         cellCss: (r, c) => cfStyleFor(r, c),
         addValidation: (rule) => mutate(() => { sheet().validations.push({ ...rule, range: toRangeObj(rule.range) }); }),
@@ -6362,14 +6354,10 @@
         redo: () => redo(),
         status: () => statusText(),
         insertChart: (t) => insertChart(t),
-        chartCount: () => sheet().charts.length,
         renderedCells: () => viewport.querySelectorAll('.sc').length,
         toggleFilter: () => toggleFilter(),
-        setFilterHidden: (col, values) => mutate(() => { if (sheet().filter) sheet().filter.hidden[col] = values; }),
-        rowHidden: (r) => hiddenRows().has(r),
         autocomplete: (text) => { select(sel.r, sel.c); beginEdit(text, { mode: 'enter' }); updateAutocomplete(); const items = acItems.slice(); cancelEdit(); return items; },
-        engine: () => engine,
-        replaceRows: (rows) => mutate(() => { sheet().rows = rows; }, { noHistory: true })
+        engine: () => engine
       }
     };
     return api;
@@ -6377,9 +6365,4 @@
 
   window.MargoEditors = window.MargoEditors || {};
   window.MargoEditors.sheet = create;
-  window.MargoSheetEngine = {
-    colName, colIndex, parseA1Range, parseLiteral, parseNumberText, formatGeneral, formatValue,
-    stepFormatDecimals, legacyFormatCode, tokenize, parse, offsetFormula, shiftFormula,
-    renameSheetInFormula, moveRefsInFormula, formulaRefs, createEngine, FN, dateSerial, ERR
-  };
 })();

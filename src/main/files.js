@@ -7,7 +7,6 @@ const mammoth = require('mammoth');
 const HTMLtoDOCX = require('html-to-docx');
 const TurndownService = require('turndown');
 const { gfm } = require('turndown-plugin-gfm');
-const ExcelJS = require('exceljs');
 const JSZip = require('jszip');
 const fidelity = require('./docx-fidelity');
 const slides = require('./slides');

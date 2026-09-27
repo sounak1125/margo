@@ -81,8 +81,6 @@ contextBridge.exposeInMainWorld('margo', {
   unwatchFile: (p) => ipcRenderer.invoke('file:unwatch', p),
   onFileChangedExternally: (cb) => on('file:changed-externally', cb),
 
-  platform: process.platform,
-
   updates: {
     status: () => ipcRenderer.invoke('updates:status'),
     check: () => ipcRenderer.invoke('updates:check'),

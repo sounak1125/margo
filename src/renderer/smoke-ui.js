@@ -1447,7 +1447,6 @@
       T.state.dirty = true;
       const dirtyPromise = T.resolveDirty();
       await wait(80);
-      const saveModal = document.querySelector('.modal:not(.hidden), #modal-backdrop:not(.hidden) .modal');
       const backdrop = document.getElementById('modal-backdrop');
       t('save changes modal opens', backdrop && !backdrop.classList.contains('hidden')
         && backdrop.textContent.includes('Save changes'));

@@ -158,4 +158,43 @@ function check(p, what = 'open') {
   return n;
 }
 
-module.exports = { init, grant, grantDir, revoke, isAllowed, check, normalize, flush };
+/* Whether any path the author handed Margo lives on this UNC host
+   (\\host\share\...). Only Windows paths can; elsewhere this is always false. */
+function grantedHost(host) {
+  const prefix = '\\\\' + String(host).toLowerCase() + '\\';
+  const on = (k) => k.toLowerCase().startsWith(prefix);
+  for (const k of session.keys()) if (on(k)) return true;
+  for (const k of load().keys()) if (on(k)) return true;
+  return dirs.some(on);
+}
+
+/* Whether Chromium may load a file: URL (main applies this to every request
+   any Margo window makes). On Windows a file: URL that names a host -
+   file://host/share/x, or file:////host/..., or either spelled with
+   backslashes or %5C - is a UNC path, and merely loading one makes Windows
+   sign in to that host over SMB or WebDAV with the author's credentials,
+   handing their NTLM hash to whoever runs it. A document asks for one with
+   nothing more than <img src="\\host\x.png">: sanitizers keep it as a
+   relative URL, it resolves against the page to file://host/x.png, and the
+   page's CSP 'self' lets it through. So a remote host is only reachable when
+   the author opened a file on it themselves - a note on a network share still
+   shows the pictures next to it. */
+function fileUrlAllowed(url) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'file:') return true;
+  let p = u.pathname;
+  try { p = decodeURIComponent(p); } catch {}
+  p = p.replace(/\\/g, '/');
+  let host = u.hostname && u.hostname.toLowerCase() !== 'localhost' ? u.hostname : '';
+  if (!host) {
+    const m = /^\/{2,}([^/]*)/.exec(p);
+    if (m) host = m[1] || '.';
+  }
+  if (host) return grantedHost(host);
+  // \??\UNC\host\... is the NT spelling of a UNC path; no Windows file name has a '?'.
+  if (process.platform === 'win32' && p.includes('?')) return false;
+  return true;
+}
+
+module.exports = { init, grant, grantDir, revoke, isAllowed, check, normalize, flush, fileUrlAllowed };

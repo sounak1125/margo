@@ -2423,8 +2423,6 @@
         scrollEditorTo: (y) => { textarea.scrollTop = y; onEditorScroll(); return previewPane.scrollTop; },
         previewPane: () => previewPane,
         offsetY: (o) => offsetY(o),
-        insertEmbeddedImage: (alt, url) => insertEmbeddedImage(alt, url),
-        exportHtml: () => exportHtml(),
         highlight: (code, lang) => Highlighter.highlight(code, lang)
       }
     };
@@ -2432,5 +2430,4 @@
 
   window.MargoEditors = window.MargoEditors || {};
   window.MargoEditors.md = create;
-  window.MargoMarkdown = { parseMdHeadings, plainWordCount, statusLine, highlight: Highlighter.highlight };
 })();

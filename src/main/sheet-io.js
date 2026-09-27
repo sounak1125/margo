@@ -191,10 +191,13 @@ function extractCellStyle(cell) {
   const b = readBorders(cell.border);
   if (b) { s.borders = b.borders; s.border = b.kind; }
   if (cell.alignment) {
+    /* Whatever the file's XML says arrives here verbatim, and the grid writes
+       these into its markup as class names, so only plain words get through. */
+    const word = (x) => typeof x === 'string' && /^[a-zA-Z]+$/.test(x);
     const h = cell.alignment.horizontal;
-    if (h) s.align = h === 'centerContinuous' ? 'center' : h === 'justify' || h === 'distributed' || h === 'fill' ? 'left' : h;
+    if (word(h)) s.align = h === 'centerContinuous' ? 'center' : h === 'justify' || h === 'distributed' || h === 'fill' ? 'left' : h;
     const v = cell.alignment.vertical;
-    if (v && v !== 'bottom') s.valign = v === 'center' ? 'middle' : v === 'justify' || v === 'distributed' ? 'top' : v;
+    if (word(v) && v !== 'bottom') s.valign = v === 'center' ? 'middle' : v === 'justify' || v === 'distributed' ? 'top' : v;
     if (cell.alignment.wrapText) s.wrap = true;
     if (cell.alignment.indent) s.indent = cell.alignment.indent;
   }
@@ -291,8 +294,6 @@ function coerceLiteral(raw) {
   if (/^(true|false)$/i.test(t)) return { value: /^true$/i.test(t) };
   return { value: s };
 }
-/* Kept for callers that only want the plain value. */
-function coerceValue(v) { return coerceLiteral(v).value; }
 
 const EXCEL_ERRORS = new Set(['#N/A', '#REF!', '#NAME?', '#DIV/0!', '#NULL!', '#VALUE!', '#NUM!']);
 function formulaResult(res) {
@@ -808,6 +809,5 @@ module.exports = {
   normalizeCell,
   modelToWorkbook,
   workbookToModel,
-  coerceValue,
   sanitizeSheetName
 };

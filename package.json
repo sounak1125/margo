@@ -1,7 +1,7 @@
 {
   "name": "margo",
   "productName": "Margo",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Margo",
   "main": "main.js",
   "author": "Sounak",
@@ -17,8 +17,8 @@
     "dist:publish": "electron-builder --publish always"
   },
   "dependencies": {
+    "@mixmark-io/domino": "^2.2.0",
     "@xmldom/xmldom": "^0.8.15",
-    "dompurify": "^3.1.6",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "google-auth-library": "^11.0.2",
@@ -26,18 +26,24 @@
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
     "marked": "^12.0.2",
-    "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^3.11.174",
     "pptxgenjs": "^4.0.1",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "electron": "^36.0.0",
-    "electron-builder": "^25.1.8",
+    "dompurify": "^3.4.16",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.17.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
     "png-to-ico": "^2.1.8",
     "sharp": "^0.35.3"
+  },
+  "overrides": {
+    "image-size": "^2.0.4",
+    "uuid": "^11.1.1",
+    "builder-util-runtime": "^9.7.0"
   },
   "build": {
     "appId": "com.sounak.margo",
@@ -54,7 +60,8 @@
       "samples/welcome.md",
       "!node_modules/pdfjs-dist/**",
       "!node_modules/pdf-lib/**",
-      "!node_modules/dompurify/**"
+      "!node_modules/dompurify/**",
+      "!node_modules/@napi-rs/**"
     ],
     "win": {
       "target": "nsis",
@@ -87,7 +94,9 @@
       "description": "Margo reads and edits Markdown, Word, Excel and PDF files in one clean, offline app.",
       "maintainer": "Sounak <sounak1125@users.noreply.github.com>",
       "desktop": {
-        "StartupWMClass": "Margo"
+        "entry": {
+          "StartupWMClass": "Margo"
+        }
       }
     },
     "publish": {

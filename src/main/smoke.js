@@ -557,7 +557,7 @@ async function pdfPageSize(file) {
 }
 
 async function pdfText(file) {
-  const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(await fsp.readFile(file));
   const doc = await pdfjs.getDocument({ data, isEvalSupported: false, disableFontFace: true }).promise;
   let text = '';
@@ -689,6 +689,55 @@ async function mainProcessTests(win, tmpDir) {
     t('security: a document cannot embed local files into its PDF export',
       res.ok && /Visible heading/.test(text) && !/SMOKE-SECRET-TOKEN/.test(text), res.ok ? text.slice(0, 120) : res.error);
   } catch (e) { t('security: a document cannot embed local files into its PDF export', false, e.message); }
+
+  /* <img src="\\host\x.png"> in any document resolves to file://host/x.png,
+     and on Windows loading that signs in to the host with the author's NTLM
+     hash. Only a host the author opened a file on may be reached. */
+  try {
+    const ok = access.fileUrlAllowed;
+    let shareOk = true;
+    if (process.platform === 'win32') {
+      const note = '\\\\smoke-share-host\\docs\\note.md';
+      access.grant(note, { persist: false });
+      shareOk = ok('file://smoke-share-host/docs/pic.png') && !ok('file://other-host/docs/pic.png');
+      access.revoke(note);
+    }
+    t('security: UNC file URLs are refused unless the author opened a file on that host',
+      ok(require('url').pathToFileURL(secret).href) && shareOk
+        && !ok('file://attacker.invalid/share/x.png') && !ok('file:////attacker.invalid/share/x.png')
+        && !ok('file:///%5C%5Cattacker.invalid%5Cshare%5Cx.png') && !ok('file://localhost//attacker.invalid/x.png'));
+  } catch (e) { t('security: UNC file URLs are refused unless the author opened a file on that host', false, e.message); }
+
+  try {
+    const wr = win.webContents.session.webRequest;
+    const failed = [];
+    wr.onErrorOccurred({ urls: ['file://*/*'] }, (d) => failed.push(d));
+    await win.webContents.executeJavaScript(String.raw`new Promise((done) => {
+      const img = new Image();
+      img.onload = img.onerror = () => done();
+      img.src = '\\\\smoke-unc.invalid\\share\\x.png';
+      setTimeout(done, 3000);
+    })`);
+    await sleep(200);
+    wr.onErrorOccurred(null);
+    const hit = failed.find((d) => /smoke-unc\.invalid/i.test(d.url));
+    t('security: a page cannot load an image from a UNC path',
+      !!hit && /BLOCKED_BY_CLIENT/.test(hit.error), hit ? `${hit.url} ${hit.error}` : 'request never seen');
+  } catch (e) { t('security: a page cannot load an image from a UNC path', false, e.message); }
+
+  /* The renderer runs vendored copies, which npm audit cannot see. */
+  try {
+    const vendor = path.join(__dirname, '..', 'renderer', 'vendor');
+    const read = (f) => fs.readFileSync(path.join(vendor, f), 'utf8');
+    const version = (text, re) => { const m = re.exec(text); return m ? m[1].split('.').map(Number) : null; };
+    const atLeast = (v, min) => !!v && (v[0] - min[0] || v[1] - min[1] || v[2] - min[2]) >= 0;
+    const pdfjs = version(read('pdf.min.mjs'), /apiVersion:"(\d+\.\d+\.\d+)"/);
+    const worker = read('pdf.worker.min.mjs');
+    const purify = version(read('purify.min.js'), /@license DOMPurify (\d+\.\d+\.\d+)/);
+    t('security: vendored pdf.js and DOMPurify are patched versions',
+      atLeast(pdfjs, [4, 2, 67]) && worker.includes(`"${pdfjs.join('.')}"`) && atLeast(purify, [3, 4, 13]),
+      `pdf.js ${pdfjs && pdfjs.join('.')}, DOMPurify ${purify && purify.join('.')}`);
+  } catch (e) { t('security: vendored pdf.js and DOMPurify are patched versions', false, e.message); }
 
   /* ---- PDF page options ---- */
   try {
