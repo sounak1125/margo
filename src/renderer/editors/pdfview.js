@@ -243,6 +243,8 @@
     async function loadDocument(data, opts) {
       const seq = ++loadSeq;
       if (loadingTask) { try { loadingTask.destroy(); } catch {} }
+      await window.pdfjsReady;
+      if (destroyed || seq !== loadSeq) return false;
       const task = pdfjsLib.getDocument({ data: data.slice(), isEvalSupported: false });
       loadingTask = task;
       let doc;
@@ -552,20 +554,19 @@
     }
 
     async function renderTextLayer(pv) {
-      if (pv.textDone || pv.textBusy || typeof pdfjsLib.renderTextLayer !== 'function') return;
+      if (pv.textDone || pv.textBusy || typeof pdfjsLib.TextLayer !== 'function') return;
       pv.textBusy = true;
       try {
         const tc = await pageTextContent(pv);
         if (!tc || destroyed || !pv.wanted || pv.textDone) return;
         pv.textLayer.textContent = '';
-        const task = pdfjsLib.renderTextLayer({
+        const task = new pdfjsLib.TextLayer({
           textContentSource: tc,
           container: pv.textLayer,
-          viewport: pv.page.getViewport({ scale: cssScale }),
-          textDivs: []
+          viewport: pv.page.getViewport({ scale: cssScale })
         });
         pv.textTask = task;
-        await task.promise;
+        await task.render();
         if (pv.textTask === task) pv.textTask = null;
         const end = document.createElement('div');
         end.className = 'endOfContent';
@@ -2995,35 +2996,10 @@
         pageSizes: () => pageViews.map((pv) => [Math.round(pv.vp1.width), Math.round(pv.vp1.height), pv.vp1.rotation]),
         rotate: (i, dir) => rotatePages([i], dir),
         deletePage: (i) => deletePages([i]),
-        movePage: (a, b) => movePage(a, b),
-        insertBlank: (i) => insertBlankPage(i),
-        mergeBytes: async (other) => {
-          const at = pdf.numPages;
-          let added = 0;
-          const ok = await mutate(async (doc) => {
-            const src = await PDFLib.PDFDocument.load(other);
-            const copied = await doc.copyPages(src, src.getPageIndices());
-            copied.forEach((p) => { doc.insertPage(at + added, p); added++; });
-          });
-          return ok ? added : 0;
-        },
-        extractBytes: async (list) => {
-          const src = await loadForEdit();
-          const out = await PDFLib.PDFDocument.create();
-          (await out.copyPages(src, list)).forEach((p) => out.addPage(p));
-          return out.save();
-        },
         parseRanges: (t, n) => parseRanges(t, n),
         output: () => buildOutput(),
-        setTool: (t) => setTool(t),
-        tool: () => tool,
         thumbsCount: () => (thumbsList ? thumbsList.querySelectorAll('.pdf-thumb').length : 0),
         textLayerSpans: (i) => (pageViews[i || 0] ? pageViews[i || 0].textLayer.querySelectorAll('span').length : 0),
-        formFields: () => Array.from(formEls.keys()),
-        setFormValue: (n, v) => setFormValue(n, v),
-        highlightSelection: () => highlightSelection(),
-        renderedCount: () => pageViews.filter((pv) => pv.rendered).length,
-        canvasCount: () => (scroll ? scroll.querySelectorAll('canvas.pdf-canvas').length : 0),
         zoom: () => zoom,
         currentPage: () => currentPage
       }

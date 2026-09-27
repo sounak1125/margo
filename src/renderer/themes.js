@@ -69,25 +69,13 @@
   const byId = Object.create(null);
   THEMES.forEach((t) => { byId[t.id] = t; });
 
-  function isTheme(id) {
-    return !!byId[id];
-  }
-
   function get(id) {
     return byId[id] || null;
-  }
-
-  function nextId(current) {
-    const i = THEMES.findIndex((t) => t.id === current);
-    const idx = i < 0 ? 0 : (i + 1) % THEMES.length;
-    return THEMES[idx].id;
   }
 
   window.MargoThemes = {
     list: THEMES,
     byId,
-    isTheme,
-    get,
-    nextId
+    get
   };
 })();

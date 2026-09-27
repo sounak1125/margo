@@ -1069,8 +1069,5 @@ module.exports = {
   readImportExtras,
   postProcessImportedHtml,
   hasPageField,
-  stripFields,
-  // exposed for tests
-  _fences: { SPACE, TAB, PARA_OPEN, PARA_CLOSE, ROW_HEADER, TABLE_OPEN, TABLE_CLOSE, HL_CLOSE },
-  _sortProps: sortProps
+  stripFields
 };

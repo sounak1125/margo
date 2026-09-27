@@ -284,7 +284,7 @@
   }
 
   async function pdfThumb(bytes) {
-    if (!window.pdfjsLib) return null;
+    if (!(await window.pdfjsReady)) return null;
     let doc = null;
     try {
       doc = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;

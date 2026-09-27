@@ -6411,7 +6411,6 @@
           addComment,
           openContextMenu: (x, y) => openContextMenu(x, y),
           closeContextMenu,
-          openStats: openStatsModal,
           openSymbols: () => openSymbolsPicker(),
           selectAll: () => selectAllDocument(),
           copyPayload: () => buildCopyPayload(),
@@ -6422,7 +6421,6 @@
           pageCount: () => pageList().length,
           paginateScheduled: () => !!paginateTimer,
           paginating: () => paginating,
-          repaginateNow: () => { cancelPaginate(); return repaginate(pageList()[0]); },
           crossPageSpan: () => getCopySpan(),
           dragSelect: (fromBody, toBody) => {
             if (!fromBody || !toBody) return false;
@@ -6433,8 +6431,6 @@
           crossPageHighlightActive: () => (
             supportsCssHighlights() && CSS.highlights.has(CROSS_SEL_HIGHLIGHT)
           ),
-          overlayBoxCount: () => document.querySelectorAll('.doc-cross-sel-box').length,
-          viewMode: () => viewMode,
           splitPreviewVisible: () => !!(splitPreviewScroll && !splitPreviewScroll.classList.contains('hidden')),
           pageBodiesEditable: () => pageList().every((pg) => {
             const b = pg.querySelector('.doc-page-body');
@@ -6448,7 +6444,6 @@
           toggleList: (k) => toggleList(k),
           highlight: (hex) => applyTextHighlight(hex),
           textColor: (hex) => applyTextColor(hex),
-          clearFormatting: () => clearFormatting(),
           changeCase: (m) => transformTextCase(m),
           insertTable: (r, c) => insertTableAt(r, c),
           insertRow: (w) => insertRow(w),
@@ -6461,14 +6456,11 @@
           borders: (m) => setTableBorders(m),
           pageBreak: () => insertPageBreak(),
           insertToc: () => insertToc(),
-          updateToc: () => updateToc(true),
           insertFootnote: () => insertFootnote(),
           cleanPaste: (html) => cleanPastedHtml(html),
           paste: (html) => insertHtmlAtCaret(cleanPastedHtml(html)),
-          capturePainter: () => togglePainter(false),
           applyFormat: (fmt) => applyCapturedFormat(fmt),
           captureFormat: () => captureFormat(),
-          painterActive: () => !!painter,
           setLayout: (patch) => setLayout(patch),
           layout: () => ({ ...layout }),
           selectImage: (img) => selectImage(img),
@@ -6478,13 +6470,10 @@
           runFind: (q) => runFind(q),
           replaceAll: () => replaceAll(),
           setSpellcheck: (on) => setSpellcheck(on),
-          spellcheckOn: () => spellEnabled,
-          showTab: (id) => showRibbonTab(id),
           undo: () => undo(),
           redo: () => redo(),
           status: () => statusLine(),
-          fontSize: (pt) => setFontSize(pt),
-          contextItems: () => contextMenuItems().filter((i) => !i.sep).map((i) => i.label)
+          fontSize: (pt) => setFontSize(pt)
         };
       },
       getData() {

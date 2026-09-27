@@ -19,17 +19,16 @@
                      spellcheck
        sheet         fx autosum chartCol chartBar chartLine chartPie filter
                      sortAZ sortZA freeze merge wrap currency percent comma
-                     decimalInc decimalDec shading borderAll borderOuter
-                     borderNone valignTop valignMiddle valignBottom plusRow
-                     plusCol
+                     shading borderAll borderOuter borderNone valignTop
+                     valignMiddle valignBottom
        files/kinds   fileMd fileDoc fileSheet filePdf fileSlides file note
                      folderOpen open save saveAs download upload exportPdf
                      print share
        templates     letter resume meeting budget todo
        shell/nav     home plus close check chevronRight chevronDown more
                      command keyboard palette sidebar pin star starFilled
-                     clock grid list trash refresh externalLink copyPath
-                     info warning success error user logout cloud sparkle
+                     clock grid list trash refresh copyPath
+                     info warning success error user logout cloud
                      sun moon settings bell zoomIn zoomOut fit window
                      density tabs present */
   const S = (d, extra) =>
@@ -49,8 +48,6 @@
     clear: S('<path d="M4 12.5 11.5 5M6 3.5h7v0M9 3.5 5.5 12.5M3 12.5h6"/>'),
     undo: S('<path d="M3 6h7a3.5 3.5 0 0 1 0 7H6"/><path d="M5.5 3.5 3 6l2.5 2.5"/>'),
     redo: S('<path d="M13 6H6a3.5 3.5 0 0 0 0 7h4"/><path d="M10.5 3.5 13 6l-2.5 2.5"/>'),
-    plusRow: S('<rect x="2" y="9" width="12" height="4.5" rx="1"/><path d="M8 2v4.5M5.8 4.2h4.4"/>'),
-    plusCol: S('<rect x="9" y="2" width="4.5" height="12" rx="1"/><path d="M2 8h4.5M4.2 5.8v4.4"/>'),
     close: S('<path d="m4 4 8 8M12 4l-8 8"/>'),
     open: S('<path d="M8 10.5V2.5M5 5l3-2.7L11 5"/><path d="M2.5 9.5v3a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-3"/>'),
     fileMd: S('<path d="M3.5 2h6L13 5.5V14h-9.5z"/><path d="M5.5 11V8l1.5 1.7L8.5 8v3M10.5 8v3m0 0 1-1m-1 1-1-1"/>'),
@@ -129,8 +126,6 @@
     currency: S('<path d="M8 2v12M10.5 4.5H6.8a1.8 1.8 0 0 0 0 3.6h2.4a1.8 1.8 0 0 1 0 3.6H5.5"/>'),
     percent: S('<path d="M12.5 3.5 3.5 12.5"/><circle cx="5" cy="5" r="1.5"/><circle cx="11" cy="11" r="1.5"/>'),
     comma: S('<path d="M8 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-.2 1.5c.8 0 1.2.6 1 1.4l-.8 2.1H6.5l.8-2c.1-.4-.2-.7-.5-.7z"/>'),
-    decimalInc: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 4.5l-1 1M1 4.5h3"/>'),
-    decimalDec: S('<path d="M3 11h2M3 13.5h.5M7 7.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm5 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 5.5l1-1M1 4.5h3"/>'),
     printLayout: S('<path d="M3.5 2h6L13 5.5V14H3.5z"/><path d="M5.5 8h5.5M5.5 10.5h5.5"/>'),
     readView: S('<path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>'),
     /* text formatting */
@@ -179,7 +174,6 @@
     list: S('<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>'),
     trash: S('<path d="M2.5 4.5h11M6.5 4.5V3a.8.8 0 0 1 .8-.8h1.4a.8.8 0 0 1 .8.8v1.5M4 4.5l.6 8.4a1.2 1.2 0 0 0 1.2 1.1h4.4a1.2 1.2 0 0 0 1.2-1.1L12 4.5"/>'),
     refresh: S('<path d="M13.5 8A5.5 5.5 0 1 1 11.8 4"/><path d="M13.5 2.5V5.5h-3"/>'),
-    externalLink: S('<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/>'),
     copyPath: S('<path d="M6.5 9.5 9.5 6.5M5 7 3.5 8.5a2.47 2.47 0 0 0 3.5 3.5L8.5 10.5M11 9l1.5-1.5A2.47 2.47 0 0 0 9 4L7.5 5.5"/>'),
     info: S('<circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.8M8 5h.01"/>'),
     warning: S('<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.3h.01"/>'),
@@ -188,7 +182,6 @@
     user: S('<circle cx="8" cy="5.8" r="2.6"/><path d="M3 13.5c.6-2.4 2.6-3.7 5-3.7s4.4 1.3 5 3.7"/>'),
     logout: S('<path d="M6 13.5H3.5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1H6M10.5 11l3-3-3-3M13.5 8H6"/>'),
     cloud: S('<path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.7-.8 3.4 3.4 0 0 1 .2 6.8z"/>'),
-    sparkle: S('<path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l1.8 1.8M10.2 10.2 12 12M12 4l-1.8 1.8M5.8 10.2 4 12"/>'),
     window: S('<rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M2 5.5h12"/>'),
     density: S('<path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h11M2.5 12.5h11"/>'),
     tabs: S('<path d="M2 13.5V5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v7"/><path d="M1.5 13.5h13"/>'),
@@ -4494,9 +4487,6 @@
 
   /* ---------------- boot ---------------- */
   async function boot() {
-    if (window.pdfjsLib) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-    }
     menubarApi = window.MargoMenubar.attach(els.menubar, menuSpec);
     applySidebarMode();
     applySettings();

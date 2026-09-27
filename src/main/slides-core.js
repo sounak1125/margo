@@ -19,7 +19,6 @@
   else root.MargoSlidesCore = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   const DEFAULT_SIZE = { w: 1280, h: 720 };
-  const PX_PER_IN = 96;
   const PAD_X = 9.6;   // PowerPoint's default text inset: 0.1 in
   const PAD_Y = 4.8;   // and 0.05 in
   const BULLET_INDENT_PT = 27;
@@ -69,7 +68,6 @@
       titleFont: 'Arial', bodyFont: 'Arial', titleBold: true
     }
   ];
-  const THEME_TOKENS = ['bg', 'title', 'text', 'muted', 'accent', 'accent2'];
 
   const LAYOUTS = [
     { id: 'title', name: 'Title' },
@@ -604,8 +602,8 @@ ${SLIDE_CSS}
   }
 
   return {
-    DEFAULT_SIZE, PX_PER_IN, PAD_X, PAD_Y, BULLET_INDENT_PT, BULLET_CHARS,
-    THEMES, THEME_TOKENS, LAYOUTS, SHAPES, ROLE_SIZE, SLIDE_CSS,
+    DEFAULT_SIZE, PAD_X, PAD_Y, BULLET_INDENT_PT, BULLET_CHARS,
+    THEMES, LAYOUTS, SHAPES, ROLE_SIZE, SLIDE_CSS,
     uid, clone, escapeHtml, normHex, safeImageSrc,
     themeOf, themeList, resolveColor, fontCss,
     textDefaults, runStyle,

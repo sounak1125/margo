@@ -1037,5 +1037,5 @@ module.exports = {
   exportHtml: (deck, title) => core.exportHtml(deck, title),
   normalizeDeck: core.normalizeDeck,
   newDeck: core.newDeck,
-  _test: { dedupeParagraphProps, imageSize, fingerprint, MARGO_PART }
+  _test: { MARGO_PART }
 };

@@ -291,8 +291,6 @@ function coerceLiteral(raw) {
   if (/^(true|false)$/i.test(t)) return { value: /^true$/i.test(t) };
   return { value: s };
 }
-/* Kept for callers that only want the plain value. */
-function coerceValue(v) { return coerceLiteral(v).value; }
 
 const EXCEL_ERRORS = new Set(['#N/A', '#REF!', '#NAME?', '#DIV/0!', '#NULL!', '#VALUE!', '#NUM!']);
 function formulaResult(res) {
@@ -808,6 +806,5 @@ module.exports = {
   normalizeCell,
   modelToWorkbook,
   workbookToModel,
-  coerceValue,
   sanitizeSheetName
 };

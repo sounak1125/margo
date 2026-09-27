@@ -557,7 +557,7 @@ async function pdfPageSize(file) {
 }
 
 async function pdfText(file) {
-  const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(await fsp.readFile(file));
   const doc = await pdfjs.getDocument({ data, isEvalSupported: false, disableFontFace: true }).promise;
   let text = '';
