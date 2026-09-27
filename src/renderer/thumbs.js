@@ -286,7 +286,7 @@
     if (!window.pdfjsLib) return null;
     let doc = null;
     try {
-      doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+      doc = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
       const page = await doc.getPage(1);
       const vp1 = page.getViewport({ scale: 1 });
       const scale = (INNER.w * 1.5) / vp1.width;

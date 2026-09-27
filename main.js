@@ -984,10 +984,13 @@ ipcMain.handle('print:document', async (_e, req) => {
   try {
     const r = plainObject(req) || {};
     if (r.kind === 'pdf') {
-      let filePath = r.path != null ? access.check(r.path, 'open') : null;
       let tmp = null;
       const data = plainObject(r.data);
-      if ((!filePath || !fs.existsSync(filePath)) && data && typeof data.base64 === 'string') {
+      // The editor's current bytes carry unsaved page edits and annotations,
+      // so they win over the copy on disk.
+      const hasBytes = !!(data && typeof data.base64 === 'string' && data.base64);
+      let filePath = !hasBytes && r.path != null ? access.check(r.path, 'open') : null;
+      if (hasBytes) {
         tmp = printing.tempPath('margo-print', 'pdf');
         fs.writeFileSync(tmp, Buffer.from(data.base64, 'base64'), { mode: 0o600 });
         filePath = tmp;
