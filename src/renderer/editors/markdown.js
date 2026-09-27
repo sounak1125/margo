@@ -227,9 +227,28 @@
   }
 
   const Pipeline = (function () {
-    const S = { defIds: new Set(), defs: new Map(), order: [], refCounts: new Map(), task: 0, slugs: new Map() };
+    const S = { defIds: new Set(), defs: new Map(), order: [], refCounts: new Map(), task: 0, slugs: new Map(), norm: '', defAt: [] };
     function reset() {
       S.defIds = new Set(); S.defs = new Map(); S.order = []; S.refCounts = new Map(); S.task = 0; S.slugs = new Map();
+      S.norm = ''; S.defAt = [];
+    }
+    /* marked asks every paragraph where the next footnote definition
+       starts, handing over the rest of the document; a regex over that is
+       quadratic on a long note. Definitions are found once per render and
+       the question becomes a binary search whenever the text handed over is
+       a tail of the whole document. */
+    const DEF_LINE = /^\[\^[^\]\s]+\]:/m;
+    function nextDefStart(src) {
+      if (!S.defAt.length) return undefined;
+      const n = S.norm.length;
+      const abs = n - src.length;
+      if (abs >= 0 && S.norm.charCodeAt(abs) === src.charCodeAt(0) && S.norm.substr(abs, 48) === src.slice(0, 48)) {
+        let lo = 0, hi = S.defAt.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (S.defAt[mid] < abs) lo = mid + 1; else hi = mid; }
+        return lo < S.defAt.length ? S.defAt[lo] - abs : undefined;
+      }
+      const m = DEF_LINE.exec(src);
+      return m ? m.index : undefined;
     }
     function uniqueSlug(text) {
       const base = slugify(text);
@@ -249,7 +268,7 @@
           {
             name: 'footnoteDef',
             level: 'block',
-            start(src) { const m = /^\[\^[^\]\s]+\]:/m.exec(src); return m ? m.index : undefined; },
+            start(src) { return nextDefStart(src); },
             tokenizer(src) {
               const m = /^\[\^([^\]\s]+)\]:[ \t]*([^\n]*(?:\n[ \t]{2,}[^\n]*)*)(?:\n|$)/.exec(src);
               if (!m) return undefined;
@@ -313,9 +332,15 @@
         out.html = '<pre>' + escapeHtml(src) + '</pre>';
         return out;
       }
+      const norm = lexerNormalise(src);
+      S.norm = norm;
+      if (norm.includes('[^')) {
+        const re = /^\[\^[^\]\s]+\]:/gm;
+        let d;
+        while ((d = re.exec(norm))) S.defAt.push(d.index);
+      }
       const tokens = m.lexer(src);
       tokens.forEach((t) => { if (t.type === 'footnoteDef') S.defIds.add(t.id); });
-      const norm = lexerNormalise(src);
       const nStarts = lineStartsOf(norm);
       let cursor = 0;
 
@@ -619,6 +644,27 @@
         }
       });
       return lines;
+    }
+
+    /* The same rendering for export (PDF, Word, HTML), without the
+       preview's controls: pictures get absolute file URLs because the
+       export is laid out from a temporary folder, and task boxes become
+       characters Word can keep. */
+    function exportHtml() {
+      const text = textarea ? textarea.value : '';
+      const frag = sanitize(Pipeline.render(text).html);
+      const base = baseUrlFor(docRef && docRef.path);
+      frag.querySelectorAll('.md-anchor').forEach((a) => a.remove());
+      frag.querySelectorAll('img').forEach((img) => resolveImage(img, base));
+      frag.querySelectorAll('input').forEach((el) => {
+        if (el.classList.contains('md-task')) el.replaceWith(document.createTextNode(el.checked ? '\u2611' : '\u2610'));
+        else el.remove();
+      });
+      frag.querySelectorAll('[id]').forEach((el) => { el.id = ID_PREFIX + el.id; });
+      frag.querySelectorAll('a[href^="#"]').forEach((a) => a.setAttribute('href', '#' + ID_PREFIX + a.getAttribute('href').slice(1)));
+      const holder = document.createElement('div');
+      holder.appendChild(frag);
+      return holder.innerHTML;
     }
 
     /* Only the blocks that changed are swapped, so pictures do not reload
@@ -1422,8 +1468,16 @@
       syncPoints = null;
       if (!textarea || !measure || !blockEls.length) return;
       const text = textarea.value;
-      if (text.length > 3000000) return;
       const starts = lineStartsOf(text);
+      if (text.length > 300000) {
+        /* Laying out a mirror of a huge note costs more than it earns; line
+           fractions of the textarea's height are close enough there. */
+        const pvBase = preview.offsetTop;
+        const h = textarea.scrollHeight;
+        const lines = Math.max(1, starts.length);
+        syncPoints = blockEls.filter((b) => b.el.isConnected).map((b) => [(b.line / lines) * h, b.el.offsetTop + pvBase]);
+        return;
+      }
       measure.style.width = textarea.clientWidth + 'px';
       measure.textContent = '';
       const frag = document.createDocumentFragment();
@@ -2296,7 +2350,13 @@
         setupStatusChrome();
         wrap.addEventListener('wheel', onCtrlWheel, { passive: false });
       },
-      getData() { return { markdown: textarea.value }; },
+      getData() {
+        let html;
+        try { html = exportHtml(); } catch { html = undefined; }
+        return { markdown: textarea.value, html };
+      },
+      /* drafts only need the text */
+      getDraft() { return { markdown: textarea.value }; },
       focus() { textarea && textarea.focus(); },
       onSaved() {
         /* Save As may have moved the note, which moves relative pictures. */
@@ -2364,6 +2424,7 @@
         previewPane: () => previewPane,
         offsetY: (o) => offsetY(o),
         insertEmbeddedImage: (alt, url) => insertEmbeddedImage(alt, url),
+        exportHtml: () => exportHtml(),
         highlight: (code, lang) => Highlighter.highlight(code, lang)
       }
     };

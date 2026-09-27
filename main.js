@@ -351,6 +351,16 @@ function createWindow() {
      with it (up to the last draft), so stop vetoing the close - and offer to
      bring it back, which restores those drafts, instead of leaving a blank
      window. */
+  /* Spelling: the Word editor draws its own context menu, so the word under
+     the pointer and Chromium's suggestions for it are handed to the page. */
+  win.webContents.on('context-menu', (_e, params) => {
+    if (!params || !params.isEditable || !params.misspelledWord) return;
+    win.webContents.send('spell:context', {
+      misspelledWord: params.misspelledWord,
+      dictionarySuggestions: (params.dictionarySuggestions || []).slice(0, 8)
+    });
+  });
+
   win.webContents.on('render-process-gone', (_e, details) => {
     rendererAlive = false;
     rendererReady = false;
@@ -1005,6 +1015,14 @@ ipcMain.handle('print:document', async (_e, req) => {
 
 ipcMain.handle('app:quit', () => { if (win) win.close(); });
 ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('spell:replace', (e, word) => {
+  if (typeof word === 'string' && word.length < 200) e.sender.replaceMisspelling(word);
+});
+ipcMain.handle('spell:add-word', (e, word) => {
+  if (typeof word === 'string' && word.trim() && word.length < 100) {
+    e.sender.session.addWordToSpellCheckerDictionary(word.trim());
+  }
+});
 
 ipcMain.handle('recents:list', () => {
   return recents.list().map((r) => {

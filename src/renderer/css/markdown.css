@@ -70,7 +70,6 @@
 .md-measure-clip { display: block; visibility: hidden; }
 .md-measure { position: absolute; top: 0; left: 0; }
 .md-input-stack.find-active .md-find-overlay-clip { display: block; }
-.md-input-stack.find-active .md-input { background: transparent; }
 .md-find-overlay,
 .md-input {
   margin: 0;
@@ -102,14 +101,15 @@
   background: color-mix(in srgb, var(--accent-strong) 70%, transparent);
   box-shadow: 0 0 0 1px var(--accent-strong);
 }
+/* The stack paints the background so find highlights behind the
+   (transparent) textarea show in every mode. */
 .md-input {
   flex: 1; min-width: 0; resize: none;
-  background: var(--bg);
+  background: transparent;
   color: var(--text); caret-color: var(--accent-strong);
   position: relative; z-index: 1;
   outline: none;
 }
-.md-wrap.mode-write .md-input { background: var(--surface); }
 .md-input::placeholder { color: var(--text-faint); }
 .md-input::selection { background: var(--sel-bg); }
 .md-pane-preview { display: block; position: relative; overflow-y: auto; background: var(--surface); }

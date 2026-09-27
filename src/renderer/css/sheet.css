@@ -426,7 +426,8 @@
   color: var(--text);
   font-family: var(--sheet-font, var(--font-ui));
   line-height: 1.25;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
   box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.22);
 }
 
@@ -739,3 +740,4 @@
 
 /* A face picker with nothing to pick is hidden rather than shown disabled. */
 .sheet-ribbon .tb-select.tb-font-variant:disabled { display: none; }
+.sheet-dialog.sheet-find { width: 480px; max-width: calc(100vw - 80px); }

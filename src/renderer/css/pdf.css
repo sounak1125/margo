@@ -142,8 +142,9 @@
 .pdf-page {
   position: relative; flex: none;
   margin: 0 auto;
-  /* the sheet is paper in every theme */
+  /* the sheet is paper in every theme, and so are the form controls on it */
   background: #fff;
+  color-scheme: light;
   border-radius: 2px;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-strong) 80%, transparent), var(--shadow-md);
 }

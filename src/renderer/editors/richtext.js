@@ -634,6 +634,7 @@
       if (!opts || opts.paginate !== false) schedulePaginate(getPageEl());
       syncSplitPreview();
       if (selectedImg) positionImageOverlay();
+      rememberSelection();
     }
 
     /* Several DOM edits that the author sees as one action are recorded as
@@ -669,6 +670,17 @@
       if (!sel || !sel.rangeCount) return;
       const r = sel.getRangeAt(0);
       if (pageBodyOf(r.startContainer) && pageBodyOf(r.endContainer)) lastRange = r.cloneRange();
+    }
+
+    /* The selection commands act on: the live one when it is in the
+       document, otherwise the last one that was. */
+    function currentRange() {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        const r = sel.getRangeAt(0);
+        if (pageBodyOf(r.startContainer)) return r;
+      }
+      return liveRange(lastRange);
     }
 
     function liveRange(r) {
@@ -996,7 +1008,7 @@
     }
 
     function currentFontPt() {
-      const r = liveRange(lastRange);
+      const r = currentRange();
       const node = r ? r.startContainer : null;
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
       if (!el) return 11;
@@ -1343,7 +1355,7 @@
     }
 
     function currentList() {
-      const r = liveRange(lastRange);
+      const r = currentRange();
       const node = r ? r.startContainer : null;
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
       const body = node && pageBodyOf(node);
@@ -1412,7 +1424,7 @@
       for (const [cmd, b] of Object.entries(stateButtons)) {
         b.classList.toggle('active', inDoc && q(cmd));
       }
-      const r = liveRange(lastRange);
+      const r = currentRange();
       const body = r ? pageBodyOf(r.startContainer) : null;
       const block = r ? closestBlock(r.startContainer, body) : null;
       if (styleBtn) {
@@ -1577,7 +1589,7 @@
 
     function caretPageIndex() {
       const pages = pageList();
-      const r = liveRange(lastRange);
+      const r = currentRange();
       const page = r ? (pageBodyOf(r.startContainer) || {}).parentElement : activePage;
       const i = page ? pages.indexOf(page) : -1;
       return i >= 0 ? i + 1 : 1;
@@ -2944,7 +2956,7 @@
     function convertWordLists(root) {
       const items = Array.from(root.querySelectorAll('p[style*="mso-list"]'));
       items.forEach((p) => {
-        if (!p.isConnected) return;
+        if (!root.contains(p)) return;
         const ignore = p.querySelector('[style*="mso-list:Ignore"], [style*="mso-list: Ignore"]');
         const glyph = ignore ? ignore.textContent.replace(/\s+/g, '') : '';
         if (ignore) ignore.remove();
@@ -3247,10 +3259,11 @@
         const g = tableGrid(table);
         const me = g.info.get(cell);
         const at = where === 'above' ? me.r : me.r + me.rs; // index the new row takes
+        const refRow = where === 'above' ? at : at - 1;
         const tr = document.createElement('tr');
         const seen = new Set();
         for (let c = 0; c < g.cols; c++) {
-          const ref = g.grid[Math.min(at, g.rows.length - 1)][c] || g.grid[Math.max(0, at - 1)][c];
+          const ref = (g.grid[refRow] || [])[c];
           if (!ref || seen.has(ref)) continue;
           seen.add(ref);
           const inf = g.info.get(ref);
@@ -3418,13 +3431,33 @@
       });
     }
 
+    /* The cells a selection covers, the way Word reads it: the rectangle
+       from the cell it starts in to the cell it ends in. Dragging down a
+       column selects that column, not every cell in between in reading
+       order. */
     function selectedCells(table) {
-      const sel = window.getSelection();
-      const r = sel.rangeCount ? sel.getRangeAt(0) : liveRange(lastRange);
+      const r = currentRange();
       if (!r) return [];
+      const cellOf = (n) => {
+        const el = n && (n.nodeType === 1 ? n : n.parentElement);
+        const c = el && el.closest('td, th');
+        return c && c.closest('table') === table ? c : null;
+      };
+      const a = cellOf(r.startContainer);
+      const b = cellOf(r.endContainer);
+      if (a && b) {
+        if (a === b) return [a];
+        const g = tableGrid(table);
+        const ia = g.info.get(a);
+        const ib = g.info.get(b);
+        const r0 = Math.min(ia.r, ib.r), r1 = Math.max(ia.r + ia.rs - 1, ib.r + ib.rs - 1);
+        const c0 = Math.min(ia.c, ib.c), c1 = Math.max(ia.c + ia.cs - 1, ib.c + ib.cs - 1);
+        const out = new Set();
+        for (let rr = r0; rr <= r1; rr++) for (let cc = c0; cc <= c1; cc++) if (g.grid[rr] && g.grid[rr][cc]) out.add(g.grid[rr][cc]);
+        return Array.from(out);
+      }
       const all = Array.from(table.querySelectorAll('td, th')).filter((c) => c.closest('table') === table);
-      const hit = all.filter((c) => r.intersectsNode(c));
-      return hit.length ? hit : [];
+      return all.filter((c) => r.intersectsNode(c));
     }
 
     function mergeCells() {
@@ -3506,11 +3539,14 @@
         if (thead) {
           let tbody = table.querySelector(':scope > tbody');
           if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
+          let firstCell = null;
           Array.from(thead.children).reverse().forEach((tr) => {
-            Array.from(tr.children).forEach((c) => renameCell(c, 'td'));
+            const cells = Array.from(tr.children).map((c) => renameCell(c, 'td'));
+            firstCell = cells[0] || firstCell;
             tbody.insertBefore(tr, tbody.firstChild);
           });
           thead.remove();
+          if (firstCell) placeCaretIn(firstCell, true);
           return;
         }
         const first = table.querySelector('tr');
@@ -3518,7 +3554,8 @@
         const head = document.createElement('thead');
         table.insertBefore(head, table.querySelector(':scope > tbody') || first);
         head.appendChild(first);
-        Array.from(first.children).forEach((c) => renameCell(c, 'th'));
+        const cells = Array.from(first.children).map((c) => renameCell(c, 'th'));
+        if (cells[0]) placeCaretIn(cells[0], true);
       });
     }
 
@@ -4029,7 +4066,7 @@
     }
 
     function linkAtSelection() {
-      const r = liveRange(lastRange);
+      const r = liveRange(savedRange) || currentRange();
       const el = r && (r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement);
       const a = el && el.closest('a[href]');
       return a && pagesRoot.contains(a) ? a : null;
@@ -4867,7 +4904,7 @@
     function ensureFindBar() {
       if (!hostEl || findBar) return;
       findBar = document.createElement('div');
-      findBar.className = 'doc-find-bar hidden';
+      findBar.className = 'doc-find-bar show-replace hidden';
       findBar.setAttribute('role', 'search');
       const toggle = (key, title, ic) =>
         `<button type="button" class="doc-find-opt" data-opt="${key}" title="${title}" aria-pressed="false">${ic}</button>`;
@@ -5296,7 +5333,9 @@
     }
 
     function hasTextSelection() {
-      const r = liveRange(savedRange) || liveRange(lastRange);
+      const sel = window.getSelection();
+      const live = sel && sel.rangeCount && pageBodyOf(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : null;
+      const r = live || liveRange(savedRange) || liveRange(lastRange);
       return !!(r && !r.collapsed && r.toString().trim());
     }
 
@@ -5490,7 +5529,7 @@
 
     /* ---------- spacing & style popovers ---------- */
     function currentBlock() {
-      const r = liveRange(lastRange);
+      const r = currentRange();
       return r ? closestBlock(r.startContainer, pageBodyOf(r.startContainer)) : null;
     }
 

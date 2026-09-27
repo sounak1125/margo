@@ -2362,7 +2362,7 @@
 
     let model = null;                 // { sheets, active }
     const engine = createEngine({ sheets: () => model.sheets });
-    const history = window.MargoHistory.create();
+    let history = window.MargoHistory.create();
     let skipHistory = false;
 
     let sel = { r: 0, c: 0 };         // active cell / anchor
@@ -2438,7 +2438,9 @@
       }
       return out;
     }
+    let fixedRange = null;            // a range the active cell is walking through (Enter/Tab)
     function selRange() {
+      if (fixedRange) return expandForMerges(fixedRange);
       const base = selEnd ? normRange(sel, selEnd) : { r1: sel.r, c1: sel.c, r2: sel.r, c2: sel.c };
       return expandForMerges(base);
     }
@@ -2455,7 +2457,7 @@
       const set = new Set();
       const f = sheet().filter;
       if (f && f.hidden && Object.keys(f.hidden).length) {
-        const last = engine.usedBounds(model.active).r;
+        const last = filterEnd(f);
         for (let r = f.r + 1; r <= last; r++) {
           for (const [col, list] of Object.entries(f.hidden)) {
             if (!list || !list.length) continue;
@@ -2468,6 +2470,15 @@
       return set;
     }
     function filterKey(r, c) { return displayText(r, c).toLowerCase(); }
+    /* A filter covers the block under its header row down to the first
+       completely empty row, so rows added at the bottom join it. */
+    function filterEnd(f) {
+      const u = engine.usedBounds(model.active);
+      let r = f.r + 1;
+      const filled = (rr) => { for (let c = f.c1; c <= f.c2; c++) if (getRaw(rr, c) !== '') return true; return false; };
+      while (r <= u.r && filled(r)) r++;
+      return r - 1;
+    }
 
     /* ---------------- layout ---------------- */
     let L = null;                     // { colPos, rowPos, nRows, nCols }
@@ -2891,7 +2902,6 @@
       for (let r = 0; r < fr; r++) frozenRows.push(r);
       const scrollCols = visibleSpan(lay.colPos, lay.nCols, lay.colPos[fc] + sx, lay.colPos[fc] + sx + mainW).filter((c) => c >= fc);
       const scrollRows = visibleSpan(lay.rowPos, lay.nRows, lay.rowPos[fr] + sy, lay.rowPos[fr] + sy + mainH).filter((r) => r >= fr);
-      const oxS = lay.colPos[fc] + sx - fw, oyS = lay.rowPos[fr] + sy - fh;
 
       const place = (el, l, t, w, h) => {
         el.style.left = l + 'px'; el.style.top = t + 'px';
@@ -2911,7 +2921,6 @@
       quads.top.innerHTML = fr ? quadCells(frozenRows, scrollCols, oxMain, 0) + quadOverlay('top', oxMain, 0, true, false) : '';
       quads.left.innerHTML = fc ? quadCells(scrollRows, frozenCols, 0, oyMain) + quadOverlay('left', 0, oyMain, false, true) : '';
       quads.main.innerHTML = quadCells(scrollRows, scrollCols, oxMain, oyMain) + quadOverlay('main', oxMain, oyMain, false, false);
-      void oxS; void oyS;
 
       // headers
       const rg = selRange();
@@ -3041,7 +3050,6 @@
       const v = normalizeEntry(value);
       if (getRaw(r, c) === v) return false;
       putRaw(sheet(), r, c, v);
-      if (!(opts && opts.silent)) return true;
       return true;
     }
 
@@ -3057,21 +3065,43 @@
       return { r: Math.max(0, Math.min(MAX_ROWS - 1, r)), c: Math.max(0, Math.min(MAX_COLS - 1, c)) };
     }
     function select(r, c, scroll = true) {
-      if (editing && !editing.pointing) commitEdit({ move: false, keepFocus: true });
+      if (editing && !editing.pointing && !commitEdit({ move: false, keepFocus: true })) return;
       ({ r, c } = clampCell(r, c));
       const m = mergeAt(r, c);
       if (m) { r = m.r1; c = m.c1; }
       sel = { r, c };
       selEnd = null;
+      fixedRange = null;
       growFor(r, c);
       if (scroll) scrollIntoView(r, c);
       afterSelection();
     }
+    /* Enter and Tab walk the active cell through a selected block without
+       losing the block, wrapping at its edges. */
+    function moveWithinSelection(dr, dc) {
+      const rg = selRange();
+      let { r, c } = sel;
+      if (dr) {
+        r += dr;
+        if (r > rg.r2) { r = rg.r1; c = c + 1 > rg.c2 ? rg.c1 : c + 1; }
+        if (r < rg.r1) { r = rg.r2; c = c - 1 < rg.c1 ? rg.c2 : c - 1; }
+      } else {
+        c += dc;
+        if (c > rg.c2) { c = rg.c1; r = r + 1 > rg.r2 ? rg.r1 : r + 1; }
+        if (c < rg.c1) { c = rg.c2; r = r - 1 < rg.r1 ? rg.r2 : r - 1; }
+      }
+      const m = mergeAt(r, c);
+      fixedRange = { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 };
+      sel = m ? { r: m.r1, c: m.c1 } : { r, c };
+      scrollIntoView(sel.r, sel.c);
+      afterSelection();
+    }
     function selectRange(r1, c1, r2, c2, scroll) {
-      if (editing && !editing.pointing) commitEdit({ move: false, keepFocus: true });
+      if (editing && !editing.pointing && !commitEdit({ move: false, keepFocus: true })) return;
       const a = clampCell(r1, c1), b = clampCell(r2, c2);
       sel = a;
       selEnd = (a.r === b.r && a.c === b.c) ? null : b;
+      fixedRange = null;
       growFor(Math.max(a.r, b.r), Math.max(a.c, b.c));
       if (scroll) scrollIntoView(b.r, b.c);
       afterSelection();
@@ -3213,9 +3243,11 @@
       editorEl.style.minHeight = rc.h + 'px';
       editorEl.style.maxWidth = Math.max(rc.w, vw - rc.x - 4) + 'px';
       editorEl.style.maxHeight = Math.max(rc.h, vh - rc.y - 4) + 'px';
-      // grow to fit the text
-      editorEl.style.width = '0px';
-      editorEl.style.width = Math.min(Math.max(rc.w, editorEl.scrollWidth + 4), Math.max(rc.w, vw - rc.x - 4)) + 'px';
+      // grow to fit the longest line, then wrap at the edge of the grid
+      const st = getStyle(editing.r, editing.c);
+      const font = cellFontCss(st);
+      const longest = editorEl.value.split('\n').reduce((m, line) => Math.max(m, measureText(line, font)), 0);
+      editorEl.style.width = Math.min(Math.max(rc.w, longest + 18), Math.max(rc.w, vw - rc.x - 4)) + 'px';
       editorEl.style.height = '0px';
       editorEl.style.height = Math.max(rc.h, editorEl.scrollHeight) + 'px';
     }
@@ -3304,7 +3336,9 @@
         renderNow();
       }
       formulaInput.value = getRaw(sel.r, sel.c);
-      if (o.move) {
+      if (o.move && !isSingleCell(selRange()) && !o.fillSelection) {
+        moveWithinSelection(o.move[0], o.move[1]);
+      } else if (o.move) {
         const n = stepFrom(ed.r, ed.c, o.move[0], o.move[1]);
         select(n.r, n.c);
       } else updateChrome();
@@ -3352,7 +3386,7 @@
     }
 
     /* ---------------- autocomplete & signature help ---------------- */
-    let acItems = [], acIndex = 0, acToken = null;
+    let acItems = [], acIndex = 0, acToken = null, acNavigated = false;
     function tokenBeforeCaret() {
       const inp = editInput();
       if (!editing || editing.text[0] !== '=') return null;
@@ -3393,6 +3427,7 @@
     }
     function updateAutocomplete() {
       const tok = tokenBeforeCaret();
+      if (!tok || !acToken || tok.start !== acToken.start) { acIndex = 0; acNavigated = false; }
       acToken = tok;
       if (tok && tok.text.length >= 1) {
         const u = tok.text.toUpperCase();
@@ -3457,10 +3492,11 @@
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           acIndex = (acIndex + (e.key === 'ArrowDown' ? 1 : -1) + acItems.length) % acItems.length;
+          acNavigated = true;
           updateAutocomplete();
           return;
         }
-        if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey)) {
+        if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey && acNavigated)) {
           e.preventDefault();
           acceptAutocomplete();
           return;
@@ -3847,7 +3883,7 @@
       const f = sheet().filter;
       if (isSingleCell(rg)) {
         if (f && sel.c >= f.c1 && sel.c <= f.c2) {
-          rg = { r1: f.r + 1, c1: f.c1, r2: Math.max(f.r + 1, engine.usedBounds(model.active).r), c2: f.c2 };
+          rg = { r1: f.r + 1, c1: f.c1, r2: Math.max(f.r + 1, filterEnd(f)), c2: f.c2 };
         } else {
           rg = currentRegion(sel.r, sel.c);
           header = detectHeader(rg);
@@ -4005,7 +4041,7 @@
     }
     function copySelection(cut) {
       const rg = clipBounds(selRange());
-      const cells = [], lines = [], htmlRows = [];
+      const cells = [], lines = [], htmlRows = [], rowIdx = [];
       const hidden = hiddenRows();
       for (let r = rg.r1; r <= rg.r2; r++) {
         const row = [], txt = [], html = [];
@@ -4017,12 +4053,11 @@
           txt.push(tsvField(t));
           html.push(`<td style="${styleCss(st)}">${escapeHtml(t)}</td>`);
         }
-        cells.push(row);
-        if (!skip) { lines.push(txt.join('\t')); htmlRows.push(`<tr>${html.join('')}</tr>`); }
+        if (!skip) { cells.push(row); rowIdx.push(r); lines.push(txt.join('\t')); htmlRows.push(`<tr>${html.join('')}</tr>`); }
       }
       const text = lines.join('\n');
       const html = `<meta charset="utf-8"><table>${htmlRows.join('')}</table>`;
-      clip = { sheet: model.active, range: rg, cells, text, cut: !!cut, merges: sheet().merges.filter((m) => m.r1 >= rg.r1 && m.r2 <= rg.r2 && m.c1 >= rg.c1 && m.c2 <= rg.c2).map((m) => ({ ...m })) };
+      clip = { sheet: model.active, range: rg, cells, rowIdx, text, cut: !!cut, merges: sheet().merges.filter((m) => m.r1 >= rg.r1 && m.r2 <= rg.r2 && m.c1 >= rg.c1 && m.c2 <= rg.c2).map((m) => ({ ...m })) };
       marching = true;
       writeClipboard(text, html);
       renderNow();
@@ -4195,7 +4230,7 @@
               const val = cell.value;
               v = val == null ? '' : isErr(val) ? val.code : typeof val === 'number' ? String(val) : typeof val === 'boolean' ? (val ? 'TRUE' : 'FALSE') : String(val);
             } else if (v && v[0] === '=' && !cp.cut) {
-              const srcR = cp.range.r1 + ((r - tg.r1) % h), srcC = cp.range.c1 + ((c - tg.c1) % w);
+              const srcR = cp.rowIdx[(r - tg.r1) % h], srcC = cp.range.c1 + ((c - tg.c1) % w);
               v = offsetFormula(v, r - srcR, c - srcC);
             }
             putRaw(sh, r, c, v);
@@ -4341,7 +4376,6 @@
       const status = wrap.querySelector('.sheet-find-status');
       const opt = (k) => wrap.querySelector(`[data-opt="${k}"]`).checked;
       if (!withReplace) wrap.querySelector('.sheet-field:nth-child(2)').classList.add('collapsed');
-      const selText = getRaw(sel.r, sel.c);
       function matcher() {
         const q = input.value;
         if (!q) return null;
@@ -4436,7 +4470,6 @@
         renderNow();
         focusGrid();
       });
-      if (selText && !selText.startsWith('=') && selText.length < 60 && false) input.value = selText;
       setTimeout(() => { input.focus(); input.select(); }, 40);
     }
 
@@ -4968,18 +5001,16 @@
     }
     function positionCharts() {
       if (!chartLayer || !model) return;
-      const lay = ensureLayout();
-      const { fc, fr } = frozen();
-      const hw = HW(), hh = HH();
-      chartLayer.style.left = hw + 'px';
-      chartLayer.style.top = hh + 'px';
+      chartLayer.style.left = HW() + 'px';
+      chartLayer.style.top = HH() + 'px';
       chartLayer.style.right = '0px';
       chartLayer.style.bottom = '0px';
+      // Charts sit on the scrolling part of the sheet, in unzoomed pixels.
       sheet().charts.forEach((ch) => {
         const el = chartEls.get(ch.id);
         if (!el) return;
-        const x = (ch.x || 0) * zoom - (fc ? 0 : 0) - gridScroll.scrollLeft + (fc ? lay.colPos[fc] - lay.colPos[fc] : 0);
-        const y = (ch.y || 0) * zoom - gridScroll.scrollTop + (fr ? 0 : 0);
+        const x = (ch.x || 0) * zoom - gridScroll.scrollLeft;
+        const y = (ch.y || 0) * zoom - gridScroll.scrollTop;
         el.box.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
         el.box.style.width = (ch.width || 420) + 'px';
         el.box.style.height = (ch.height || 280) + 'px';
@@ -5002,6 +5033,8 @@
         width: 420,
         height: 280
       };
+      // step down past charts already sitting at that spot
+      while (sheet().charts.some((o) => Math.abs((o.x || 0) - ch.x) < 24 && Math.abs((o.y || 0) - ch.y) < 24)) ch.y += 32;
       mutate(() => { sheet().charts.push(ch); });
       ctx.toast(`Chart added for ${ch.range} — drag it by the title, resize from the corner`);
     }
@@ -5392,10 +5425,7 @@
     }
     function switchSheet(i) {
       if (i === model.active || i < 0 || i >= model.sheets.length) return;
-      if (editing) {
-        if (editing.text[0] === '=' && pointable()) { editing.sheetIdx = editing.sheetIdx == null ? model.active : editing.sheetIdx; }
-        else commitEdit({ keepFocus: true });
-      }
+      if (editing && !commitEdit({ keepFocus: true })) return;
       model.active = i;
       sel = { r: 0, c: 0 }; selEnd = null;
       gridScroll.scrollTop = 0; gridScroll.scrollLeft = 0;
@@ -5509,9 +5539,9 @@
       const f = sheet().filter;
       if (!f) return;
       closeMenu();
-      const u = engine.usedBounds(model.active);
+      const last = filterEnd(f);
       const counts = new Map();
-      for (let r = f.r + 1; r <= u.r; r++) {
+      for (let r = f.r + 1; r <= last; r++) {
         const key = filterKey(r, col);
         if (!counts.has(key)) counts.set(key, displayText(r, col));
       }
@@ -5883,25 +5913,14 @@
           return;
         case 'Enter': {
           e.preventDefault();
-          const rg = selRange();
-          if (!isSingleCell(rg)) {
-            // move within the selection
-            let { r, c } = sel;
-            r += e.shiftKey ? -1 : 1;
-            if (r > rg.r2) { r = rg.r1; c = c + 1 > rg.c2 ? rg.c1 : c + 1; }
-            if (r < rg.r1) { r = rg.r2; c = c - 1 < rg.c1 ? rg.c2 : c - 1; }
-            const keep = selEnd;
-            sel = { r, c }; selEnd = keep;
-            if (!selEnd) selEnd = null;
-            afterSelection();
-            return;
-          }
+          if (!isSingleCell(selRange())) { moveWithinSelection(e.shiftKey ? -1 : 1, 0); return; }
           const to = stepFrom(sel.r, sel.c, e.shiftKey ? -1 : 1, 0);
           select(to.r, to.c);
           return;
         }
         case 'Tab': {
           e.preventDefault();
+          if (!isSingleCell(selRange())) { moveWithinSelection(0, e.shiftKey ? -1 : 1); return; }
           const to = stepFrom(sel.r, sel.c, 0, e.shiftKey ? -1 : 1);
           select(to.r, to.c);
           return;
@@ -6157,9 +6176,14 @@
       if (isErr(v)) return { error: v.code };
       return v;
     }
+    let dataMemo = null;
     function getData() {
       if (editing) commitEdit({ keepFocus: true });
+      // Nothing changed since the last call (a draft save right after a
+      // thumbnail, say): the computed half is still good.
+      const memo = dataMemo && dataMemo.gen === recalcCount && dataMemo.sheets === model.sheets ? dataMemo : null;
       const out = model.sheets.map((sh, s) => {
+        if (memo && memo.parts[s] && memo.parts[s].src === sh) return { ...memo.parts[s].data, name: sh.name, styles: sh.styles, colWidths: sh.colWidths, rowHeights: sh.rowHeights, charts: sh.charts, freeze: sh.freeze, filter: sh.filter, merges: sh.merges.map(rangeName), condFormats: sh.condFormats.map((c) => ({ ...c, range: rangeName(c.range) })), validations: sh.validations.map((v) => ({ ...v, range: rangeName(v.range) })), hideGrid: sh.hideGrid || undefined };
         const rows = sh.rows.map((row) => {
           const r = (row || []).map((v) => (v == null ? '' : v));
           while (r.length && r[r.length - 1] === '') r.pop();
@@ -6197,6 +6221,7 @@
           display
         };
       });
+      dataMemo = { gen: recalcCount, sheets: model.sheets, parts: out.map((d, i) => ({ src: model.sheets[i], data: { rows: d.rows, results: d.results, display: d.display } })) };
       return { sheets: out, active: model.active };
     }
 
@@ -6208,6 +6233,10 @@
           sheets: src.map((s, i) => normalizeSheet(s, i)),
           active: Math.max(0, Math.min((doc && doc.active) || 0, src.length - 1))
         };
+        /* Every undo step is a full snapshot, so a very large workbook keeps
+           fewer of them rather than holding hundreds of megabytes. */
+        const cellCount = model.sheets.reduce((n, sh) => n + sh.rows.reduce((m, row) => m + (row ? row.length : 0), 0), 0);
+        history = window.MargoHistory.create({ limit: Math.max(12, Math.min(80, Math.floor(3e6 / Math.max(1, cellCount)))) });
         buildRibbon();
         buildDom(hostNode);
         wire();

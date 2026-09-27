@@ -33,8 +33,10 @@ const PARA_CLOSE = '\uE031';
 const ROW_HEADER = '\uE032';
 const TABLE_OPEN = '\uE033';
 const TABLE_CLOSE = '\uE034';
+const FN_OPEN = '\uE035';
+const FN_CLOSE = '\uE036';
 const DIGIT_BASE = 0xE040;
-const ANY_FENCE = /[\uE005\uE006\uE00F-\uE01F\uE030-\uE034\uE040-\uE04F]/g;
+const ANY_FENCE = /[\uE005\uE006\uE00F-\uE01F\uE030-\uE036\uE040-\uE04F]/g;
 
 /* Word names nine of the highlight colours Margo offers; orange and custom
    colours travel as run shading instead. */
@@ -114,9 +116,21 @@ function styleOf(el, prop) {
   try { return el.style ? el.style.getPropertyValue(prop) : ''; } catch { return ''; }
 }
 
+/* Where a fence goes inside a table cell: in the cell's first paragraph
+   when it has one, so the fence does not become a paragraph of its own. */
+function fenceHost(cell) {
+  let el = cell;
+  for (;;) {
+    let first = el.firstChild;
+    while (first && first.nodeType === 3 && !/\S/.test(first.nodeValue)) first = first.nextSibling;
+    if (first && first.nodeType === 1 && /^(P|DIV|H[1-6])$/.test(first.tagName)) { el = first; continue; }
+    return el;
+  }
+}
+
 function prepareDocxHtml(html, opts) {
   const D = dom();
-  const out = { html: String(html || ''), directives: [], alts: [], ok: false };
+  const out = { html: String(html || ''), directives: [], alts: [], notes: [], ok: false };
   if (!D) return out;
   let doc;
   try {
@@ -153,6 +167,26 @@ function prepareDocxHtml(html, opts) {
     moveKids(el, n);
     el.replaceWith(n);
   });
+
+  /* Footnotes: each reference becomes a fence the XML pass swaps for a real
+     w:footnoteReference, and the notes block at the end of the document
+     becomes word/footnotes.xml. */
+  const noteText = new Map();
+  q('.margo-footnotes li').forEach((li) => noteText.set(li.getAttribute('data-fn') || '', (li.textContent || '').replace(/\s+/g, ' ').trim()));
+  q('sup.margo-fn-ref').forEach((ref) => {
+    const idx = out.notes.length;
+    out.notes.push(noteText.get(ref.getAttribute('data-fn') || '') || '');
+    const span = doc.createElement('span');
+    span.appendChild(doc.createTextNode(FN_OPEN + encodeNum(idx) + FN_CLOSE));
+    ref.replaceWith(span);
+  });
+  q('.margo-footnotes').forEach((el) => el.remove());
+  // The zero-width space Margo puts after a reference for the caret.
+  if (out.notes.length) {
+    const tw = doc.createTreeWalker(body, 4);
+    let tn;
+    while ((tn = tw.nextNode())) if (tn.nodeValue.indexOf('\u200b') >= 0) tn.nodeValue = tn.nodeValue.replace(/\u200b/g, '');
+  }
 
   // Page breaks: html-to-docx only knows its own marker.
   q('div[data-margo-page-break]').forEach((el) => {
@@ -307,7 +341,7 @@ function prepareDocxHtml(html, opts) {
     rows.forEach((tr, i) => {
       const cells = Array.from(tr.children).filter((c) => /^(TD|TH)$/.test(c.tagName));
       const isHead = headRows.has(tr) || (cells.length > 0 && cells.every((c) => c.tagName === 'TH'));
-      if (isHead && cells[0]) cells[0].insertBefore(doc.createTextNode(ROW_HEADER), cells[0].firstChild);
+      if (isHead && cells[0]) { const at = fenceHost(cells[0]); at.insertBefore(doc.createTextNode(ROW_HEADER), at.firstChild); }
       if (i === 0) {
         const cg = Array.from(table.children).find((c) => c.tagName === 'COLGROUP');
         const cols = cg ? Array.from(cg.children) : [];
@@ -325,7 +359,7 @@ function prepareDocxHtml(html, opts) {
     const mode = /\bmargo-tbl-none\b/.test(table.className || '') ? 'none'
       : /\bmargo-tbl-outer\b/.test(table.className || '') ? 'outer' : null;
     const first = table.querySelector('td, th');
-    if (mode && first) first.insertBefore(doc.createTextNode(TABLE_OPEN + encodeNum(TABLE_MODES.indexOf(mode)) + TABLE_CLOSE), first.firstChild);
+    if (mode && first) { const at = fenceHost(first); at.insertBefore(doc.createTextNode(TABLE_OPEN + encodeNum(TABLE_MODES.indexOf(mode)) + TABLE_CLOSE), at.firstChild); }
   });
 
   // Highlights: Word colours by name, anything else as run shading.
@@ -369,7 +403,8 @@ function prepareDocxHtml(html, opts) {
     if (!el.parentNode) return;
     const idx = directives.length;
     directives.push(d);
-    el.insertBefore(doc.createTextNode(PARA_OPEN + encodeNum(idx) + PARA_CLOSE), el.firstChild);
+    const at = fenceHost(el);
+    at.insertBefore(doc.createTextNode(PARA_OPEN + encodeNum(idx) + PARA_CLOSE), at.firstChild);
   });
 
   out.html = body.innerHTML;
@@ -493,6 +528,72 @@ function applyHighlightFences(xml) {
     if (!on || !/<w:t\b/.test(run)) return run;
     return addRunProp(run, `<w:highlight w:val="${on}"/>`, 'highlight');
   });
+}
+
+function applyFootnoteFences(xml) {
+  if (xml.indexOf(FN_OPEN) < 0) return xml;
+  const re = new RegExp(FN_OPEN + '([\\uE040-\\uE04F]+)' + FN_CLOSE);
+  return xml.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (runXml) => {
+    if (runXml.indexOf(FN_OPEN) < 0) return runXml;
+    const rPr = (/<w:rPr>[\s\S]*?<\/w:rPr>|<w:rPr\/>/.exec(runXml) || [''])[0];
+    const text = (/<w:t\b[^>]*>([^<]*)<\/w:t>/.exec(runXml) || [])[1] || '';
+    const parts = [];
+    let rest = text;
+    let m;
+    while ((m = re.exec(rest))) {
+      const before = rest.slice(0, m.index);
+      if (before) parts.push(`<w:r>${rPr}<w:t xml:space="preserve">${before}</w:t></w:r>`);
+      const id = decodeNum(m[1]) + 1;
+      parts.push(`<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="${id}"/></w:r>`);
+      rest = rest.slice(m.index + m[0].length);
+    }
+    if (rest) parts.push(`<w:r>${rPr}<w:t xml:space="preserve">${rest}</w:t></w:r>`);
+    return parts.join('');
+  });
+}
+
+function footnotesXml(notes) {
+  const sepPr = '<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>';
+  const body = notes.map((text, i) =>
+    `<w:footnote w:id="${i + 1}"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>` +
+    `<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>` +
+    `<w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve"> ${xmlText(text)}</w:t></w:r></w:p></w:footnote>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W_NS}>` +
+    `<w:footnote w:type="separator" w:id="-1"><w:p>${sepPr}<w:r><w:separator/></w:r></w:p></w:footnote>` +
+    `<w:footnote w:type="continuationSeparator" w:id="0"><w:p>${sepPr}<w:r><w:continuationSeparator/></w:r></w:p></w:footnote>` +
+    body + '</w:footnotes>';
+}
+
+async function addFootnotesPart(zip, notes) {
+  if (!notes || !notes.length) return;
+  zip.file('word/footnotes.xml', footnotesXml(notes));
+  const relsPath = 'word/_rels/document.xml.rels';
+  const relsFile = zip.file(relsPath);
+  if (relsFile) {
+    let rels = await relsFile.async('string');
+    if (!/relationships\/footnotes"/.test(rels)) {
+      rels = rels.replace('</Relationships>',
+        '<Relationship Id="rIdMargoFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>');
+      zip.file(relsPath, rels);
+    }
+  }
+  const ctFile = zip.file('[Content_Types].xml');
+  if (ctFile) {
+    let ct = await ctFile.async('string');
+    if (!/footnotes\.xml/.test(ct)) {
+      ct = ct.replace('</Types>', '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>');
+      zip.file('[Content_Types].xml', ct);
+    }
+  }
+  const setFile = zip.file('word/settings.xml');
+  if (setFile) {
+    let st = await setFile.async('string');
+    if (!/<w:footnotePr>/.test(st)) {
+      const pr = '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>';
+      st = /<w:decimalSymbol\b/.test(st) ? st.replace(/<w:decimalSymbol\b/, pr + '<w:decimalSymbol') : st.replace('</w:settings>', pr + '</w:settings>');
+      zip.file('word/settings.xml', st);
+    }
+  }
 }
 
 function applyTabFences(xml) {
@@ -711,6 +812,7 @@ async function finishDocx(buf, prep, opts) {
     xml = applyHighlightFences(xml);
     xml = applyStructureFences(xml, (prep && prep.directives) || []);
     xml = applyTabFences(xml);
+    xml = applyFootnoteFences(xml);
     xml = xml.split(SPACE).join(' ');
     xml = xml.replace(ANY_FENCE, '');
     xml = tidyTables(xml);
@@ -721,6 +823,7 @@ async function finishDocx(buf, prep, opts) {
 
     const styles = zip.file('word/styles.xml');
     if (styles) zip.file('word/styles.xml', addStyles(await styles.async('string')));
+    await addFootnotesPart(zip, prep && prep.notes);
 
     const names = Object.keys(zip.files);
     names.filter((n) => /^word\/header\d*\.xml$/.test(n)).forEach((n) => zip.file(n, headerXml(o.headerText)));
@@ -816,6 +919,43 @@ function postProcessImportedHtml(html, extras) {
       p.replaceWith(doc.createElement('hr'));
     }
   });
+
+  /* Footnotes and endnotes: mammoth writes a bracketed link per reference
+     and an ordered list of notes at the end; Margo keeps numbered
+     references and a notes block it renumbers itself. */
+  const noteItems = Array.from(body.querySelectorAll('li[id^="footnote-"], li[id^="endnote-"]'));
+  const refs = Array.from(body.querySelectorAll('a[href^="#footnote-"], a[href^="#endnote-"]'))
+    .filter((a) => !/-ref-/.test(a.getAttribute('href') || ''));
+  if (refs.length) {
+    const block = doc.createElement('div');
+    block.className = 'margo-footnotes';
+    const ol = doc.createElement('ol');
+    block.appendChild(ol);
+    const byId = new Map(noteItems.map((li) => [li.getAttribute('id'), li]));
+    refs.forEach((a, i) => {
+      const target = (a.getAttribute('href') || '').slice(1);
+      const id = 'fnimp' + (i + 1);
+      const sup = doc.createElement('sup');
+      sup.className = 'margo-fn-ref';
+      sup.setAttribute('data-fn', id);
+      sup.textContent = String(i + 1);
+      let host = a;
+      while (host.parentNode && host.parentNode.tagName === 'SUP' && host.parentNode.childNodes.length === 1) host = host.parentNode;
+      host.replaceWith(sup);
+      const li = doc.createElement('li');
+      li.setAttribute('data-fn', id);
+      const src = byId.get(target);
+      if (src) {
+        src.querySelectorAll('a[href^="#footnote-ref-"], a[href^="#endnote-ref-"]').forEach((b) => b.remove());
+        li.textContent = (src.textContent || '').replace(/\s+/g, ' ').trim();
+      }
+      if (!li.textContent) li.appendChild(doc.createElement('br'));
+      ol.appendChild(li);
+    });
+    const lists = new Set(noteItems.map((li) => li.parentNode).filter(Boolean));
+    lists.forEach((l) => l.remove());
+    body.appendChild(block);
+  }
 
   // Blank lines: mammoth writes them as <p></p>, which has no height.
   Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li')).forEach((el) => {

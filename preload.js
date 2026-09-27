@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld('margo', {
   closeAck: (handled) => ipcRenderer.invoke('app:close-ack', handled),
   closeNow: () => ipcRenderer.invoke('app:close-now'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  spell: {
+    onContext: (cb) => on('spell:context', cb),
+    replace: (word) => ipcRenderer.invoke('spell:replace', word),
+    addWord: (word) => ipcRenderer.invoke('spell:add-word', word)
+  },
 
   /* The path of a File the author dropped or picked. Main only lets the
      renderer open paths the author handed Margo, and a real File object is

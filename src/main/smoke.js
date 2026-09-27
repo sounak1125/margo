@@ -54,6 +54,79 @@ async function backendTests(samplesDir, tmpDir) {
       html.slice(0, 120));
   } catch (e) { t('backend: docx -> html (mammoth)', false, e.message); }
 
+  // Word round trip: what the editor writes has to come back as it went out.
+  try {
+    const px = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DAwMDAxAAGAAkQAQHJ0TsFAAAAAElFTkSuQmCC';
+    const html =
+      '<p class="margo-title">Plan</p><p class="margo-subtitle">Draft</p><h1>Intro</h1>' +
+      '<p>Say <b>bold</b> <i>italic</i> <mark class="hl-yellow" style="background-color:#ffff00">marked</mark> ' +
+      'and <mark style="background-color:#45818e">teal</mark>.</p><p><br></p>' +
+      '<p style="margin-top:12pt;margin-bottom:6pt;text-indent:18pt">Spaced</p>' +
+      '<blockquote><p>Quoted</p></blockquote><pre>let x = 1;</pre>' +
+      '<ul class="margo-checklist"><li class="is-checked">Done</li><li>Todo</li></ul>' +
+      '<table class="margo-tbl-none" style="width:100%"><thead><tr><th>H</th><th>I</th></tr></thead>' +
+      '<tbody><tr><td>a</td><td>b</td></tr></tbody></table>' +
+      `<p><img src="data:image/png;base64,${px}" alt="Tiny dot" style="width:40px;height:20px"></p><hr>` +
+      '<div data-margo-page-break style="page-break-before:always"></div>' +
+      '<p>Note here<sup class="margo-fn-ref" data-fn="f1">1</sup> end.</p>' +
+      '<div class="margo-footnotes"><ol><li data-fn="f1">The source.</li></ol></div>';
+    const layout = { size: 'a4', orientation: 'portrait', margins: 'narrow', headerText: 'Head', footerText: 'Foot', showPageNumbers: true };
+    const buf = await files.htmlToDocxBuffer(html, 'Plan', layout);
+    const rtPath = path.join(tmpDir, 'fidelity.docx');
+    await fsp.writeFile(rtPath, buf);
+    const zip = await JSZip.loadAsync(buf);
+    const xml = await zip.file('word/document.xml').async('string');
+    t('backend: docx writes no fence characters', !/[-]/.test(xml));
+    t('backend: docx keeps the space between formatted words', /bold<\/w:t>[\s\S]*?> <\/w:t>[\s\S]*?italic/.test(xml));
+    t('backend: docx writes styles, spacing, header row, footnotes',
+      /w:pStyle w:val="Title"/.test(xml) && /w:pStyle w:val="Quote"/.test(xml) && /w:before="240"/.test(xml)
+      && /<w:tblHeader\/>/.test(xml) && /<w:footnoteReference w:id="1"\/>/.test(xml) && !!zip.file('word/footnotes.xml'));
+    const footer = await zip.file('word/footer1.xml').async('string');
+    t('backend: docx footer has page numbers', /PAGE/.test(footer) && /NUMPAGES/.test(footer) && footer.includes('Foot'));
+    t('backend: docx has a header part', !!zip.file('word/header1.xml'));
+    const back = (await files.openPath(rtPath)).html;
+    const has = (re) => re.test(back);
+    t('backend: docx round trip keeps title/subtitle/quote/code',
+      has(/<p class="margo-title">Plan/) && has(/margo-subtitle/) && has(/<blockquote><p>Quoted/) && has(/<pre>/), back.slice(0, 300));
+    t('backend: docx round trip keeps highlights and spaces',
+      has(/<strong>bold<\/strong> <em>italic<\/em> <mark class="hl-yellow">marked<\/mark>/) && has(/background-color:#45818e/), back.slice(0, 400));
+    t('backend: docx round trip keeps blank lines and paragraph spacing',
+      has(/<p><br><\/p>/) && has(/margin-top:12pt;margin-bottom:6pt|margin-top:12pt/) && has(/text-indent:18/), back.slice(0, 600));
+    t('backend: docx round trip keeps checklist, table header and borders',
+      has(/<ul class="margo-checklist"><li class="is-checked">Done<\/li><li>Todo<\/li><\/ul>/) && has(/<table class="margo-tbl-none"><thead>/),
+      back.slice(0, 800));
+    t('backend: docx round trip keeps image size, alt text and rule',
+      has(/alt="Tiny dot"/) && has(/width: 40px; height: 20px/) && has(/<hr>/), back.replace(/data:[^"]+/g, '').slice(0, 900));
+    t('backend: docx round trip keeps page break and footnote',
+      has(/data-margo-page-break/) && has(/<sup class="margo-fn-ref" data-fn="[^"]+">1<\/sup>/) && has(/<li data-fn="[^"]+">The source\.<\/li>/),
+      back.replace(/data:[^"]+/g, '').slice(-400));
+    const again = await files.htmlToDocxBuffer(back, 'Plan', layout);
+    const again2 = path.join(tmpDir, 'fidelity2.docx');
+    await fsp.writeFile(again2, again);
+    const back2 = (await files.openPath(again2)).html;
+    t('backend: docx second round trip is stable', back2 === back,
+      `${back.length} vs ${back2.length}`);
+  } catch (e) { t('backend: docx round trip', false, e.stack || e.message); }
+
+  // A foreign document without page numbers must not gain them on open.
+  try {
+    const plainBuf = await files.htmlToDocxBuffer('<p>x</p>', 'x', { footerText: 'Only text', showPageNumbers: false });
+    const pp = path.join(tmpDir, 'nonumbers.docx');
+    // Strip Margo's own layout part so the section properties are read.
+    const z = await JSZip.loadAsync(plainBuf);
+    await fsp.writeFile(pp, await z.generateAsync({ type: 'nodebuffer' }));
+    const d = await files.openPath(pp);
+    t('backend: docx without page fields opens without page numbers',
+      d.layout && d.layout.showPageNumbers === false && d.layout.footerText === 'Only text', JSON.stringify(d.layout));
+  } catch (e) { t('backend: docx page-number detection', false, e.message); }
+
+  // PDF export html carries the page setup and header/footer.
+  try {
+    const h = files.htmlForPdfExport({ kind: 'doc', title: 'x', data: { html: '<p>x</p>', layout: { size: 'a4', headerText: 'H', showPageNumbers: true } } });
+    t('backend: doc pdf html has page size, header and page numbers',
+      /@page \{ size: 8\.27in 11\.69in/.test(h) && /@top-left \{ content: "H"/.test(h) && /counter\(pages\)/.test(h), h.slice(0, 400));
+  } catch (e) { t('backend: doc pdf html', false, e.message); }
+
   // html -> md via turndown
   try {
     const md = files.turndownHtml('<h2>Hi there</h2><ul><li>alpha</li><li>beta</li></ul><p><strong>bold</strong></p>');

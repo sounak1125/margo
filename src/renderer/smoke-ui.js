@@ -195,6 +195,18 @@
     T.togglePin(cfg.welcomePath, 'welcome.md');
     t('shell: unpinning removes it', !document.querySelector('#home-pinned .home-tile'));
 
+    /* Export as PDF asks for page setup for a note (not for a Word file) */
+    T.resetSession();
+    await T.newDoc('md');
+    const exporting = T.exportPdf();
+    await wait(60);
+    const pageOpts = document.querySelectorAll('#modal-body .pdf-page-options .settings-row').length;
+    t('shell: PDF export asks for paper, orientation and margins', modalOpen() && pageOpts === 3, `rows=${pageOpts}`);
+    const cancelBtn = [...document.querySelectorAll('#modal-actions .btn')].find((b) => b.textContent === 'Cancel');
+    if (cancelBtn) cancelBtn.click();
+    t('shell: cancelling page setup cancels the export', (await exporting) === false);
+    T.state.dirty = false;
+
     /* reopen last session */
     T.resetSession();
     await T.openFromPath(cfg.welcomePath);
@@ -737,9 +749,10 @@
         t('doc comment button sits in the Insert tab as well',
           railBtns.filter((b) => b.title === 'Add comment').length >= 2,
           String(railBtns.filter((b) => b.title === 'Add comment').length));
+        // "Footnote" is its own feature; the check is for the old "note" label.
         t('doc has no Add note label left',
-          !railBtns.some((b) => /note/i.test(b.title || '')),
-          railBtns.map((b) => b.title).filter((x) => /note/i.test(x || '')).join(','));
+          !railBtns.some((b) => /\bnotes?\b/i.test(b.title || '')),
+          railBtns.map((b) => b.title).filter((x) => /\bnotes?\b/i.test(x || '')).join(','));
         /* The browser rewrites SVG markup on parse, so both sides are put
            through it before being compared. */
         const asParsed = (svg) => { const d = document.createElement('div'); d.innerHTML = svg || ''; return d.innerHTML; };

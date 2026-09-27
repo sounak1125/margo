@@ -525,12 +525,12 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
     const md = data.markdown ?? '';
     if (MD_EXTS.includes(ext)) return atomicWrite(target, (tmp) => fsp.writeFile(tmp, md, 'utf8'));
     if (ext === '.docx') {
-      let buf = await htmlToDocxBuffer(marked.parse(md), titleOf(target));
+      let buf = await htmlToDocxBuffer(markdownBody(data), titleOf(target));
       buf = await maybeEmbedDocxThumb(buf, thumbDataUrl);
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
     if (ext === '.html') {
-      const html = htmlDocument(marked.parse(md), titleOf(target));
+      const html = htmlDocument(markdownBody(data), titleOf(target));
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, html, 'utf8'));
     }
     throw new Error(`Can't save markdown as ${ext}`);
@@ -1159,8 +1159,17 @@ function escapeHtml(s) {
 }
 
 /* Full HTML document used for PDF export via printToPDF */
+/* The markdown editor sends its own sanitised rendering (footnotes, task
+   boxes, pictures resolved against the note's folder); anything else - a
+   caller with only the text - falls back to marked. */
+function markdownBody(data) {
+  const d = data || {};
+  if (typeof d.html === 'string' && d.html.trim()) return d.html;
+  return marked.parse(d.markdown ?? '');
+}
+
 function htmlForPdfExport({ kind, data, title }) {
-  if (kind === 'md') return htmlDocument(marked.parse(data.markdown ?? ''), title);
+  if (kind === 'md') return htmlDocument(markdownBody(data), title);
   if (kind === 'slides') return slides.exportHtml(data.deck, title);
   if (kind === 'doc') return docHtmlDocument(data.html ?? '<p></p>', title, data.layout);
   if (kind === 'sheet') return htmlDocument(sheetIo.pdfBody(data), title);
