@@ -5024,12 +5024,24 @@
       const lay = ensureLayout();
       const data = (() => { const tmp = { range: rangeName(rg) }; return chartData(tmp); })();
       const title = data.series.length === 1 && data.series[0].name && !/^Series /.test(data.series[0].name) ? data.series[0].name : 'Chart';
+      // Land beside the data rather than over it: skip past every filled
+      // column in the rows the chart will cover.
+      let clearCol = rg.c2 + 1;
+      const rowsCovered = Math.ceil(280 / 20);
+      for (let r = rg.r1; r <= rg.r1 + rowsCovered; r++) {
+        const row = sheet().rows[r];
+        if (!row) continue;
+        for (let c = row.length - 1; c >= clearCol; c--) {
+          if (row[c] != null && row[c] !== '') { clearCol = c + 1; break; }
+        }
+      }
+      clearCol = Math.min(clearCol, lay.nCols);
       const ch = {
         id: 'c' + Date.now().toString(36),
         type: type || 'column',
         title,
         range: rangeName(rg),
-        x: Math.round(lay.colPos[Math.min(rg.c2 + 1, lay.nCols)] / zoom + 16),
+        x: Math.round(lay.colPos[clearCol] / zoom + 16),
         y: Math.round(lay.rowPos[rg.r1] / zoom),
         width: 420,
         height: 280
