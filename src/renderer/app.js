@@ -372,8 +372,14 @@
     /* Keys typed while a dialog is up used to land in the document behind
        it, because focus never left the editor. The dialog takes focus (its
        first field, else its default button) and Tab cycles inside it. */
+    /* A text field would take the document's selection with it, and an
+       editor asking a question usually still needs that selection for its
+       answer - so from inside a document only a button takes focus. */
+    const ae = document.activeElement;
+    const fromEditor = !!(ae && (ae.isContentEditable || (ae.closest && ae.closest('.editor-host'))));
     const target = (opts && opts.initialFocus)
       || els.modalBody.querySelector('[autofocus]')
+      || (!fromEditor && els.modalBody.querySelector('input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="number"], textarea'))
       || primaryBtn
       || els.modalActions.querySelector('button');
     if (target) {
@@ -1857,16 +1863,59 @@
   }
 
   /* ---------------- export as PDF ---------------- */
+  /* Page setup for exports of documents that have none of their own (a
+     Markdown note, a spreadsheet). Word documents and presentations bring
+     their page size with them, so they skip this step. Remembers the last
+     choice. */
+  const PDF_PAGE_KEY = 'margo.pdfPage';
+  async function askPdfPageOptions() {
+    let last = {};
+    try { last = JSON.parse(localStorage.getItem(PDF_PAGE_KEY) || '{}') || {}; } catch {}
+    const lang = (navigator.language || '').toLowerCase();
+    const localSize = /^(en-us|en-ca|es-mx|fil|en-ph)/.test(lang) ? 'Letter' : 'A4';
+    const choice = {
+      size: ['A4', 'Letter', 'Legal', 'A3', 'A5', 'Tabloid'].includes(last.size) ? last.size : localSize,
+      landscape: !!last.landscape,
+      margins: ['normal', 'narrow', 'moderate', 'wide', 'none'].includes(last.margins) ? last.margins : 'normal'
+    };
+    const body = document.createElement('div');
+    body.className = 'settings-page pdf-page-options';
+    body.appendChild(settingsRow('Paper size', null,
+      selectControl([['A4', 'A4 (210 × 297 mm)'], ['Letter', 'Letter (8.5 × 11 in)'], ['Legal', 'Legal (8.5 × 14 in)'], ['A3', 'A3'], ['A5', 'A5'], ['Tabloid', 'Tabloid']],
+        choice.size, 'Paper size', (v) => { choice.size = v; })));
+    body.appendChild(settingsRow('Orientation', null,
+      segmentedControl([['portrait', 'Portrait'], ['landscape', 'Landscape']], choice.landscape ? 'landscape' : 'portrait', 'Orientation',
+        (v) => { choice.landscape = v === 'landscape'; })));
+    body.appendChild(settingsRow('Margins', null,
+      selectControl([['normal', 'Normal'], ['narrow', 'Narrow'], ['moderate', 'Moderate'], ['wide', 'Wide'], ['none', 'None']],
+        choice.margins, 'Margins', (v) => { choice.margins = v; })));
+    const go = await openModal('Export as PDF', body, [
+      { label: 'Cancel', value: null },
+      { label: 'Export…', primary: true, value: 'go' }
+    ]);
+    if (go !== 'go') return null;
+    try { localStorage.setItem(PDF_PAGE_KEY, JSON.stringify(choice)); } catch {}
+    return choice;
+  }
+
   async function exportPdf(explicitPath) {
     if (!state.doc || !state.editor) return false;
     if (state.doc.kind === 'pdf') { toast('This is already a PDF — use Save As'); return false; }
-    const data = await Promise.resolve(state.editor.getData());
+    const doc = state.doc;
+    const editor = state.editor;
+    let page;
+    if (!explicitPath && (doc.kind === 'md' || doc.kind === 'sheet')) {
+      page = await askPdfPageOptions();
+      if (!page) return false;
+    }
+    const data = await Promise.resolve(editor.getData());
     const res = await window.margo.exportPdf({
-      kind: state.doc.kind,
+      kind: doc.kind,
       data,
-      suggestedName: state.doc.name,
-      currentPath: state.doc.path,
-      path: explicitPath || undefined
+      suggestedName: doc.name,
+      currentPath: doc.path,
+      path: explicitPath || undefined,
+      page
     });
     if (res.canceled) return false;
     if (!res.ok) { toast(res.error || 'Export failed', 'error'); return false; }
@@ -3309,7 +3358,6 @@
   }
   document.addEventListener('mousedown', (e) => {
     if (!els.accountMenu || els.accountMenu.classList.contains('hidden')) return;
-    if (els.titlebarRight && els.titlebarRight.contains(e.target)) return;
     if (els.btnAccount.contains(e.target) || els.accountMenu.contains(e.target)) return;
     closeAccountMenu();
   });
@@ -4519,6 +4567,7 @@
     },
     getEditor: () => state.editor,
     exportTo: (path) => exportPdf(path),
+    exportPdf,
     openSidebar,
     closeSidebar,
     loadRecents,
