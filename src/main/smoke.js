@@ -292,6 +292,66 @@ async function backendTests(samplesDir, tmpDir) {
   } catch (e) { t('backend: xlsx chart metadata round trip', false, e.message); }
 
   try {
+    const fxXlsx = path.join(tmpDir, 'formula-roundtrip.xlsx');
+    await files.save({
+      kind: 'sheet',
+      path: fxXlsx,
+      data: {
+        sheets: [{
+          name: 'Calc',
+          rows: [['2', '3', '=A1*B1', '=SUM(A1:B1)'], ['=C1/0', '15%', '$1,234.50', '2026-03-05']],
+          styles: {
+            '0,2': { numFmt: '"$"#,##0.00', bold: true, italic: true, underline: true, color: '#112233', fill: '#ffeeaa', align: 'center', valign: 'middle', wrap: true, size: 14, borders: { t: 'thin', b: 'medium' } }
+          },
+          results: { '0,2': 6, '0,3': 5, '1,0': { error: '#DIV/0!' } },
+          merges: ['A4:B5'],
+          freeze: { rows: 1, cols: 1 },
+          condFormats: [{ range: 'A1:B1', type: 'gt', v1: '2', style: { fill: '#c6efce' } }],
+          validations: [{ range: 'E1:E3', type: 'list', values: ['Yes', 'No'], strict: true }]
+        }],
+        active: 0
+      }
+    });
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(fxXlsx);
+    const c1 = wb.getWorksheet('Calc').getCell('C1').value;
+    t('backend: xlsx writes formulas with cached results',
+      c1 && c1.formula === 'A1*B1' && c1.result === 6, JSON.stringify(c1));
+    const back = await files.openPath(fxXlsx);
+    const s = back.sheets[0];
+    t('backend: xlsx formulas read back as formulas',
+      s.rows[0][2] === '=A1*B1' && s.rows[0][3] === '=SUM(A1:B1)' && s.rows[1][0] === '=C1/0', JSON.stringify(s.rows));
+    t('backend: xlsx typed literals keep value and format',
+      s.rows[1][1] === '0.15' && s.styles['1,1'].numFmt === '0%' && s.rows[1][2] === '1234.5' && s.rows[1][3] === '2026-03-05',
+      JSON.stringify(s.rows[1]) + JSON.stringify(s.styles['1,1']));
+    const st = s.styles['0,2'] || {};
+    t('backend: xlsx cell styles round trip',
+      st.numFmt === '"$"#,##0.00' && st.bold && st.italic && st.underline && st.color === '#112233' && st.fill === '#ffeeaa'
+        && st.align === 'center' && st.valign === 'middle' && st.wrap && st.size === 14 && st.borders && st.borders.t === 'thin' && st.borders.b === 'medium',
+      JSON.stringify(st));
+    t('backend: xlsx merges and freeze panes round trip',
+      JSON.stringify(s.merges) === '["A4:B5"]' && s.freeze.rows === 1 && s.freeze.cols === 1, JSON.stringify([s.merges, s.freeze]));
+    t('backend: xlsx conditional formats and validation round trip',
+      s.condFormats.length === 1 && s.condFormats[0].type === 'gt' && s.validations.length === 1 && s.validations[0].values.join() === 'Yes,No',
+      JSON.stringify([s.condFormats, s.validations]));
+  } catch (e) { t('backend: xlsx formulas/styles round trip', false, e.stack); }
+
+  try {
+    const semi = path.join(tmpDir, 'semicolon.csv');
+    await fsp.writeFile(semi, '﻿name;amount;note\r\n"Smith; J";"1,5";"say ""hi"""\r\nÄrger;2;"two\nlines"\r\n');
+    const back = await files.openPath(semi);
+    const rows = back.sheets[0].rows;
+    t('backend: csv detects ; delimiter, strips BOM, keeps quotes and newlines',
+      rows[0][0] === 'name' && rows[1][0] === 'Smith; J' && rows[1][2] === 'say "hi"' && rows[2][0] === 'Ärger' && rows[2][2] === 'two\nlines',
+      JSON.stringify(rows));
+    const out = path.join(tmpDir, 'computed.csv');
+    await files.save({ kind: 'sheet', path: out, data: { sheets: [{ name: 'S', rows: [['a', '=1+1'], ['x,y', '3']], results: { '0,1': 2 } }], active: 0 } });
+    const text = await fsp.readFile(out, 'utf8');
+    t('backend: csv export writes computed values and quotes', /^﻿?a,2\r\n"x,y",3/.test(text), JSON.stringify(text));
+  } catch (e) { t('backend: csv delimiter/BOM handling', false, e.stack); }
+
+  try {
     const drafts = require('./drafts');
     const recents = require('./recents');
     recents.clear();
@@ -304,6 +364,89 @@ async function backendTests(samplesDir, tmpDir) {
       `listed=${listed.length} stored=${stored.length}`);
     recents.clear();
   } catch (e) { t('backend: recents keep missing files', false, e.message); }
+}
+
+/* ---------------- presentations (.pptx) ---------------- */
+
+async function slidesBackendTests(tmpDir) {
+  const core = require('./slides-core');
+  const slides = require('./slides');
+  const deckPath = path.join(tmpDir, 'backend-deck.pptx');
+  const png = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'icon.png')).toString('base64');
+  const deck = core.newDeck('editorial');
+  deck.slides[0].elements[0].paragraphs = [core.para('Backend deck')];
+  const s2 = core.makeSlide('title-content', deck.size);
+  s2.elements[0].paragraphs = [core.para('Agenda')];
+  s2.elements[1].paragraphs = [
+    { align: 'left', list: 'bullet', level: 0, runs: [{ text: 'Plain ' }, { text: 'bold red', b: true, color: '#cc0000' }] },
+    { align: 'center', list: 'number', level: 1, runs: [{ text: 'Second\nline', size: 30, i: true }] }
+  ];
+  s2.elements.push(core.imageEl({ src: 'data:image/png;base64,' + png, x: 900, y: 420, w: 200, h: 120, nw: 512, nh: 512, fit: 'cover' }));
+  s2.elements.push(core.shapeEl({ shape: 'arrow', x: 100, y: 650, w: 400, h: 0, stroke: '#123456', strokeWidth: 4, fill: null }));
+  s2.notes = 'Say hello to the room';
+  s2.background = { color: '#f0f4ff' };
+  deck.slides.push(s2);
+
+  try {
+    await files.save({ kind: 'slides', path: deckPath, data: { deck } });
+    const buf = await fsp.readFile(deckPath);
+    const back = await files.openPath(deckPath);
+    const same = JSON.stringify(back.deck) === JSON.stringify(core.normalizeDeck(deck));
+    t('backend: pptx write/read round trip is exact', back.kind === 'slides' && same && buf[0] === 0x50 && buf[1] === 0x4b,
+      same ? `len=${buf.length}` : JSON.stringify(back.deck).slice(0, 180));
+  } catch (e) { t('backend: pptx write/read round trip is exact', false, e.stack || e.message); }
+
+  try {
+    const zip = await JSZip.loadAsync(await fsp.readFile(deckPath));
+    const names = Object.keys(zip.files);
+    const slideXml = await zip.file('ppt/slides/slide2.xml').async('string');
+    const paras = slideXml.match(/<a:p>[\s\S]*?<\/a:p>/g) || [];
+    const onePPr = paras.every((p) => (p.match(/<a:pPr[\s/>]/g) || []).length <= 1);
+    const hasNotes = names.some((n) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(n));
+    const hasMedia = names.some((n) => /^ppt\/media\//.test(n));
+    t('backend: pptx package is well-formed (one pPr per paragraph, notes, media)',
+      onePPr && hasNotes && hasMedia && /Say hello/.test(await zip.file(names.find((n) => /notesSlide2\.xml$/.test(n)) || names.find((n) => /notesSlide\d\.xml$/.test(n))).async('string')),
+      `onePPr=${onePPr} notes=${hasNotes} media=${hasMedia}`);
+  } catch (e) { t('backend: pptx package is well-formed (one pPr per paragraph, notes, media)', false, e.message); }
+
+  // A presentation edited elsewhere: without Margo's own part the slides are
+  // read from their XML (text, lists, formatting, images, background, notes).
+  try {
+    const zip = await JSZip.loadAsync(await fsp.readFile(deckPath));
+    zip.remove(slides._test.MARGO_PART);
+    const foreign = path.join(tmpDir, 'backend-foreign.pptx');
+    await fsp.writeFile(foreign, await zip.generateAsync({ type: 'nodebuffer' }));
+    const back = await files.openPath(foreign);
+    const sl = back.deck.slides[1];
+    const texts = sl.elements.filter((e) => e.type === 'text');
+    const body = texts.find((e) => core.elementText(e).includes('Plain'));
+    const boldRun = body && body.paragraphs[0].runs.find((r) => r.text === 'bold red');
+    const img = sl.elements.find((e) => e.type === 'image');
+    const arrow = sl.elements.find((e) => e.type === 'shape' && e.shape === 'arrow');
+    const ok = back.deck.slides.length === 2
+      && core.elementText(texts[0]) === 'Agenda'
+      && !!boldRun && boldRun.b === true && boldRun.color === '#cc0000'
+      && body.paragraphs[0].list === 'bullet' && body.paragraphs[1].list === 'number' && body.paragraphs[1].level === 1
+      && core.paragraphText(body.paragraphs[1]) === 'Second\nline'
+      && !!img && /^data:image\/png;base64,/.test(img.src) && !!img.crop
+      && !!arrow && arrow.stroke === '#123456'
+      && sl.background && sl.background.color === '#f0f4ff'
+      && sl.notes === 'Say hello to the room';
+    t('backend: pptx without Margo metadata reads from slide XML', ok,
+      JSON.stringify({ n: back.deck.slides.length, texts: texts.map(core.elementText), img: !!img, arrow: !!arrow, bg: sl.background, notes: sl.notes }).slice(0, 190));
+  } catch (e) { t('backend: pptx without Margo metadata reads from slide XML', false, e.stack || e.message); }
+
+  try {
+    const html = files.htmlForPdfExport({ kind: 'slides', data: { deck }, title: 'Deck' });
+    const pages = (html.match(/<section class="page">/g) || []).length;
+    t('backend: slides export html has one page per slide', pages === 2 && html.includes('Backend deck') && /@page\s*\{\s*size:\s*1280px 720px/.test(html), `pages=${pages}`);
+  } catch (e) { t('backend: slides export html has one page per slide', false, e.message); }
+
+  try {
+    t('backend: .pptx maps to the slides kind', files.kindFromPath('/x/y/Deck.PPTX') === 'slides'
+      && files.saveFilters('slides')[0].extensions[0] === 'pptx'
+      && /\.pptx$/.test(files.suggestSavePath({ kind: 'slides', suggestedName: 'Untitled.pptx' }, tmpDir)));
+  } catch (e) { t('backend: .pptx maps to the slides kind', false, e.message); }
 }
 
 /* ---------------- main-process safety + platform tests ---------------- */
@@ -763,6 +906,24 @@ async function validateRendererArtifacts(tmpDir) {
     const size = thumb ? (await thumb.async('nodebuffer')).length : 0;
     t('files: saved docx embeds desktop thumbnail', !!thumb && size > 400, `size=${size}`);
   } catch (e) { t('files: saved docx embeds desktop thumbnail', false, e.message); }
+
+  try {
+    const back = await files.openPath(path.join(tmpDir, 'ui-deck.pptx'));
+    const core = require('./slides-core');
+    const all = back.deck.slides.map((sl) => sl.elements.map(core.elementText).join(' ')).join(' | ');
+    t('files: renderer-saved pptx reopens with its slides',
+      back.kind === 'slides' && back.deck.slides.length >= 2 && all.includes('Smoke deck title') && all.includes('Smoke text box'),
+      `${back.deck.slides.length} slides :: ${all.slice(0, 150)}`);
+  } catch (e) { t('files: renderer-saved pptx reopens with its slides', false, e.message); }
+
+  try {
+    const size = await pdfPageSize(path.join(tmpDir, 'export-slides.pdf'));
+    // exported from the same deck the renderer saved as ui-deck.pptx
+    const want = { slides: (await files.openPath(path.join(tmpDir, 'ui-deck.pptx'))).deck.slides.length };
+    t('files: slides pdf is one landscape slide-sized page per slide',
+      size.pages === want.slides && size.width === 960 && size.height === 540,
+      JSON.stringify({ size, want }));
+  } catch (e) { t('files: slides pdf is one landscape slide-sized page per slide', false, e.message); }
 }
 
 async function run(win) {
@@ -780,6 +941,9 @@ async function run(win) {
   console.log('SMOKE start');
   await backendTests(samplesDir, tmpDir);
   try {
+    await slidesBackendTests(tmpDir);
+  } catch (e) { t('slides backend tests crashed', false, e.stack || e.message); }
+  try {
     await mainProcessTests(win, tmpDir);
   } catch (e) { t('main-process tests crashed', false, e.stack || e.message); }
 
@@ -792,6 +956,8 @@ async function run(win) {
       samplesDir,
       tmpDir,
       sep: path.sep,
+      // MARGO_SMOKE_ONLY=slides runs just that renderer suite (quick iteration)
+      only: process.env.MARGO_SMOKE_ONLY || null,
       welcomePath: path.join(samplesDir, 'welcome.md'),
       docxPath: path.join(samplesDir, 'sample.docx'),
       xlsxPath: path.join(samplesDir, 'sample.xlsx'),

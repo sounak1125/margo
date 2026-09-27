@@ -2,36 +2,31 @@
    record() stores the state AFTER a mutation. seed() sets the baseline
    on mount so the first undo returns to the loaded document. */
 (function () {
+  /* Deep copy for nested data (sheet grids, notes, layout). structuredClone
+     keeps what JSON drops (undefined, Dates, NaN); JSON is the fallback for
+     anything it refuses. */
+  function deepCopy(v) {
+    try {
+      if (typeof structuredClone === 'function') return structuredClone(v);
+    } catch {}
+    return JSON.parse(JSON.stringify(v));
+  }
+
+  /* Snapshots are plain objects. Top-level strings (a Word page's html can
+     run to megabytes) are immutable and shared rather than copied; anything
+     nested is copied so a later edit cannot reach back into history.
+     This used to whitelist the keys of each editor's snapshot and silently
+     drop the rest - so a field an editor added to its snapshot (a filter, a
+     comment list, a header) was never restored by undo. */
   function clone(value) {
     if (value == null || typeof value !== 'object') return value;
     if (Array.isArray(value)) return value.map(clone);
-
-    /* Word snapshot: html is an immutable string; avoid JSON round-trip of MB payloads. */
-    if (typeof value.html === 'string') {
-      return {
-        html: value.html,
-        notes: Array.isArray(value.notes) ? value.notes.map((n) => ({ ...n })) : value.notes,
-        layout: value.layout ? { ...value.layout } : value.layout
-      };
-    }
-
-    /* Markdown snapshot */
-    if (typeof value.text === 'string' && 'start' in value && 'end' in value) {
-      return { text: value.text, start: value.start, end: value.end };
-    }
-
-    /* Sheet snapshot — nested grid still needs a deep clone */
-    if (Array.isArray(value.sheets)) {
-      return {
-        sheets: JSON.parse(JSON.stringify(value.sheets)),
-        active: value.active,
-        sel: value.sel ? { ...value.sel } : value.sel,
-        selEnd: value.selEnd ? { ...value.selEnd } : value.selEnd,
-        autoFilterActive: value.autoFilterActive
-      };
-    }
-
-    return JSON.parse(JSON.stringify(value));
+    const out = {};
+    Object.keys(value).forEach((k) => {
+      const v = value[k];
+      out[k] = v == null || typeof v !== 'object' ? v : deepCopy(v);
+    });
+    return out;
   }
 
   function create(opts) {
@@ -73,9 +68,15 @@
       if (index <= 0) return false;
       applying = true;
       coalesceOpen = false;
+      const from = index;
       try {
         index -= 1;
         apply(clone(stack[index]));
+      } catch (err) {
+        /* A snapshot that fails to apply leaves the document where it was,
+           so the timeline stays where it was too. */
+        index = from;
+        throw err;
       } finally {
         applying = false;
       }
@@ -86,9 +87,13 @@
       if (index >= stack.length - 1) return false;
       applying = true;
       coalesceOpen = false;
+      const from = index;
       try {
         index += 1;
         apply(clone(stack[index]));
+      } catch (err) {
+        index = from;
+        throw err;
       } finally {
         applying = false;
       }

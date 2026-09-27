@@ -20,8 +20,18 @@
   const ICON_CHEVRON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>';
   const MARGIN = 6;
 
+  /* Separators never lead, trail or double up, so a spec can add optional
+     groups (each with its own leading separator) without leaving stray
+     lines when a group is empty. */
   function resolveItems(items) {
-    return (typeof items === 'function' ? items() : items) || [];
+    const list = ((typeof items === 'function' ? items() : items) || []).filter(Boolean);
+    const out = [];
+    list.forEach((it) => {
+      if (it.sep && (!out.length || out[out.length - 1].sep)) return;
+      out.push(it);
+    });
+    while (out.length && out[out.length - 1].sep) out.pop();
+    return out;
   }
 
   /* Places a fixed-position menu next to an anchor rect, flipping or sliding
@@ -99,7 +109,7 @@
          (and a click inside it counts as inside the menu); positioned fixed
          so the parent's scroll box never clips it. */
       level.el.appendChild(sub);
-      const lv = { el: sub, active: null, parentRow: row };
+      const lv = { el: sub, active: null, parentRow: row, viaKeyboard: !!viaKeyboard };
       levels.push(lv);
       render(lv, items);
       row.classList.add('open-sub');
@@ -264,7 +274,10 @@
         }
         case 'Escape':
           handled();
-          if (levels.length > 1) {
+          /* A submenu reached with the arrow keys backs out one level, the
+             way a native menu does; one that opened under the pointer goes
+             with the rest of the menu. */
+          if (levels.length > 1 && level.viaKeyboard) {
             closeFrom(levels.length - 1);
           } else {
             close();
@@ -451,5 +464,9 @@
     };
   }
 
-  window.MargoMenubar = { attach, contextMenu, placeMenu };
+  function closeContextMenu() {
+    if (activeContext) activeContext.close();
+  }
+
+  window.MargoMenubar = { attach, contextMenu, closeContextMenu, placeMenu };
 })();

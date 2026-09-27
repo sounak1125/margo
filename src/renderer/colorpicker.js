@@ -43,8 +43,12 @@
     if (!value) return null;
     const direct = normalizeHex(value);
     if (direct) return direct;
-    const m = String(value).match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+    if (/^transparent$/i.test(String(value).trim())) return null;
+    const m = String(value).match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?/i);
     if (!m) return null;
+    /* rgba(0, 0, 0, 0) is how a computed style says "no colour": reading it
+       as black ticked the black swatch for text that had no highlight. */
+    if (m[4] !== undefined && parseFloat(m[4]) === 0) return null;
     const hex = (n) => Number(n).toString(16).padStart(2, '0');
     return '#' + hex(m[1]) + hex(m[2]) + hex(m[3]);
   }
@@ -144,6 +148,31 @@
     '<path d="M9.9 3.1 3.6 9.4a2 2 0 0 0-.5.9l-.6 2.2 2.2-.6a2 2 0 0 0 .9-.5l6.3-6.3"/>' +
     '</svg>';
 
+  const PLUS_SVG =
+    '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>';
+
+  /* Arrow keys walk the palette grid (ten columns), so the picker works
+     without a mouse; Enter/Space on a swatch picks it as a click does. */
+  function wireGridKeys(grid) {
+    grid.addEventListener('keydown', (e) => {
+      const cells = [...grid.querySelectorAll('.mc-swatch')];
+      const i = cells.indexOf(document.activeElement);
+      if (i < 0) return;
+      let next = -1;
+      if (e.key === 'ArrowRight') next = Math.min(cells.length - 1, i + 1);
+      else if (e.key === 'ArrowLeft') next = Math.max(0, i - 1);
+      else if (e.key === 'ArrowDown') next = Math.min(cells.length - 1, i + 10);
+      else if (e.key === 'ArrowUp') next = Math.max(0, i - 10);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = cells.length - 1;
+      if (next < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      cells[next].focus();
+    });
+  }
+
   /* The screen eyedropper is a Chromium capability rather than something the
      page can polyfill, so the button only exists where the API does. */
   function eyedropperSupported() {
@@ -194,6 +223,9 @@
     const grid = document.createElement('div');
     grid.className = 'mc-grid';
     PALETTE.forEach((row) => row.forEach((hex) => grid.appendChild(makeSwatch(hex, current, finish))));
+    grid.setAttribute('role', 'grid');
+    grid.setAttribute('aria-label', 'Colours');
+    wireGridKeys(grid);
     el.appendChild(grid);
 
     const customLabel = document.createElement('div');
@@ -210,7 +242,7 @@
     customBtn.className = 'mc-swatch mc-plus';
     customBtn.title = 'Custom colour';
     customBtn.setAttribute('aria-label', 'Custom colour');
-    customBtn.textContent = '+';
+    customBtn.innerHTML = PLUS_SVG;
     row.appendChild(customBtn);
 
     if (eyedropperSupported()) {
@@ -303,7 +335,13 @@
 
     const onDocMouseDown = (e) => { if (!el.contains(e.target) && !anchor.contains(e.target)) closeOpen(); };
     const onKeyDown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeOpen(); } };
-    const onReflow = () => place(el, anchor);
+    /* The button the picker hangs off can disappear under it (its tab
+       closed, its toolbar rebuilt); the picker goes with it rather than
+       parking itself in the top-left corner. */
+    const onReflow = () => {
+      if (!anchor.isConnected) { closeOpen(); return; }
+      place(el, anchor);
+    };
 
     place(el, anchor);
     openPop = { el, anchor, onDocMouseDown, onKeyDown, onReflow };

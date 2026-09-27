@@ -10,6 +10,8 @@ const { gfm } = require('turndown-plugin-gfm');
 const ExcelJS = require('exceljs');
 const JSZip = require('jszip');
 const fidelity = require('./docx-fidelity');
+const slides = require('./slides');
+const sheetIo = require('./sheet-io');
 
 marked.setOptions({ gfm: true });
 
@@ -372,6 +374,7 @@ function kindFromPath(p) {
   if (ext === '.docx') return 'doc';
   if (ext === '.xlsx' || ext === '.csv') return 'sheet';
   if (ext === '.pdf') return 'pdf';
+  if (ext === '.pptx') return 'slides';
   return null;
 }
 
@@ -398,198 +401,20 @@ async function openPath(filePath) {
     return { kind: 'doc', name, path: filePath, html, notes, layout };
   }
   if (ext === '.xlsx') {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(filePath);
-    return { kind: 'sheet', name, path: filePath, ...workbookToModel(wb) };
+    return { kind: 'sheet', name, path: filePath, ...(await sheetIo.readXlsx(filePath)) };
   }
   if (ext === '.csv') {
-    const wb = new ExcelJS.Workbook();
-    await wb.csv.readFile(filePath, { map: (v) => v });
-    const model = workbookToModel(wb);
-    model.sheets[0].name = sanitizeSheetName(path.basename(filePath, ext)) || 'Sheet1';
-    return { kind: 'sheet', name, path: filePath, ...model };
+    return { kind: 'sheet', name, path: filePath, ...(await sheetIo.readCsv(filePath)) };
   }
   if (ext === '.pdf') {
     // viewer loads the bytes itself via file:read-binary
     return { kind: 'pdf', name, path: filePath };
   }
+  if (ext === '.pptx') {
+    const deck = await slides.readPptx(filePath);
+    return { kind: 'slides', name, path: filePath, deck };
+  }
   throw new Error(`Unsupported file type: ${ext || '(none)'}`);
-}
-
-function normalizeCell(v) {
-  if (v === null || v === undefined) return '';
-  const t = typeof v;
-  if (t === 'string') return v;
-  if (t === 'number') return String(v);
-  if (t === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (v instanceof Date) return formatDate(v);
-  if (t === 'object') {
-    if ('formula' in v) {
-      return '=' + v.formula;
-    }
-    if ('sharedFormula' in v) {
-      if (v.result !== undefined) return normalizeCell(v.result);
-      return '';
-    }
-    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join('');
-    if ('error' in v) return String(v.error);
-    if ('text' in v) return normalizeCell(v.text);
-    if ('hyperlink' in v) return String(v.hyperlink);
-  }
-  return String(v);
-}
-
-const FONT_FACE_SUFFIXES = [
-  'Thin Italic', 'Hairline Italic', 'ExtraLight Italic', 'UltraLight Italic', 'Light Italic',
-  'Medium Italic', 'SemiBold Italic', 'DemiBold Italic', 'Bold Italic',
-  'ExtraBold Italic', 'UltraBold Italic', 'Black Italic', 'Heavy Italic',
-  'Extra Light', 'Ultra Light', 'Semi Bold', 'Demi Bold', 'Extra Bold', 'Ultra Bold',
-  'Thin', 'Hairline', 'ExtraLight', 'UltraLight', 'Light',
-  'Medium', 'SemiBold', 'DemiBold', 'ExtraBold', 'UltraBold',
-  'Black', 'Heavy', 'Bold', 'Italic', 'Oblique', 'Regular'
-];
-
-function splitExcelFont(name, bold, italic) {
-  const raw = String(name || '').trim();
-  const fallback = bold && italic ? 'Bold Italic' : bold ? 'Bold' : italic ? 'Italic' : 'Regular';
-  if (!raw) return { font: 'Calibri', face: fallback };
-  const lower = raw.toLowerCase();
-  for (const suf of FONT_FACE_SUFFIXES) {
-    const token = ' ' + suf.toLowerCase();
-    if (lower.endsWith(token) && raw.length > suf.length + 1) {
-      return { font: raw.slice(0, raw.length - suf.length - 1).trim(), face: suf };
-    }
-  }
-  return { font: raw, face: fallback };
-}
-
-function excelFontFromStyle(st) {
-  const family = st.font || 'Calibri';
-  const face = st.face || (st.bold && st.italic ? 'Bold Italic' : st.bold ? 'Bold' : st.italic ? 'Italic' : 'Regular');
-  const compact = String(face).toLowerCase().replace(/[_\s]+/g, '');
-  const italic = compact.includes('italic') || compact.includes('oblique') || !!st.italic;
-  let bold = !!st.bold;
-  if (st.face) {
-    bold = compact.includes('extrabold') || compact.includes('ultrabold') ||
-      compact.includes('black') || compact.includes('heavy') ||
-      (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'));
-  }
-  let name = family;
-  const weightPart = String(face).replace(/\s*(italic|oblique)\s*/ig, ' ').trim();
-  const weightCompact = weightPart.toLowerCase().replace(/[_\s]+/g, '');
-  if (weightPart && !/^(regular|normal|bold)$/.test(weightCompact)) {
-    name = `${family} ${weightPart}`.replace(/\s+/g, ' ').trim();
-  }
-  return {
-    name,
-    size: st.size || 11,
-    bold,
-    italic,
-    underline: !!st.underline,
-    strike: !!st.strike,
-    color: st.color ? { argb: 'FF' + st.color.replace('#', '') } : undefined
-  };
-}
-
-const THICK_BORDERS = ['medium', 'thick', 'double'];
-
-/* Margo's grid carries a single border style per cell rather than one per
-   edge, so the four Excel edges collapse to the nearest of what it can draw. */
-function excelBorderKind(border) {
-  if (!border) return null;
-  const edges = ['top', 'right', 'bottom', 'left']
-    .map((k) => border[k] && border[k].style)
-    .filter(Boolean);
-  if (!edges.length) return null;
-  if (edges.some((style) => THICK_BORDERS.includes(style))) return 'thick';
-  return edges.length === 4 ? 'all' : 'outer';
-}
-
-function extractCellStyle(cell) {
-  const s = {};
-  if (cell.font) {
-    const split = splitExcelFont(cell.font.name, !!cell.font.bold, !!cell.font.italic);
-    s.font = split.font;
-    s.face = split.face;
-    if (cell.font.size) s.size = cell.font.size;
-    if (cell.font.bold) s.bold = true;
-    else {
-      const compact = split.face.toLowerCase().replace(/[_\s]+/g, '');
-      if (compact.includes('extrabold') || compact.includes('ultrabold') ||
-          compact.includes('black') || compact.includes('heavy') ||
-          (compact.includes('bold') && !compact.includes('semibold') && !compact.includes('demibold'))) {
-        s.bold = true;
-      }
-    }
-    if (cell.font.italic || /italic|oblique/i.test(split.face)) s.italic = true;
-    if (cell.font.underline) s.underline = true;
-    if (cell.font.strike) s.strike = true;
-    if (cell.font.color && cell.font.color.argb) {
-      s.color = '#' + cell.font.color.argb.slice(-6);
-    }
-  }
-  if (cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor && cell.fill.fgColor.argb) {
-    s.fill = '#' + cell.fill.fgColor.argb.slice(-6);
-  }
-  const border = excelBorderKind(cell.border);
-  if (border) s.border = border;
-  if (cell.alignment) {
-    if (cell.alignment.horizontal) s.align = cell.alignment.horizontal;
-    if (cell.alignment.vertical) s.valign = cell.alignment.vertical;
-    if (cell.alignment.wrapText) s.wrap = true;
-  }
-  if (cell.numFmt) {
-    s.numFmt = cell.numFmt;
-  }
-  return Object.keys(s).length ? s : null;
-}
-
-function formatDate(d) {
-  const pad = (n) => String(n).padStart(2, '0');
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  if (d.getHours() || d.getMinutes() || d.getSeconds()) {
-    return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-  return date;
-}
-
-function workbookToModel(wb) {
-  const meta = readMargoMeta(wb);
-  const chartsBySheet = (meta && meta.chartsBySheet) || {};
-  const sheets = [];
-  wb.eachSheet((ws) => {
-    if (ws.name === MARGO_META_SHEET) return;
-    const rows = [];
-    const styles = {};
-    const colWidths = {};
-    const rowHeights = {};
-    ws.columns.forEach((col, idx) => {
-      if (col && col.width) colWidths[idx] = excelWidthToPx(col.width);
-    });
-    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-      // Excel keeps row height in points; the grid works in CSS pixels.
-      if (row.height) rowHeights[rowNumber - 1] = Math.round(row.height * 96 / 72);
-      const arr = [];
-      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        arr[colNumber - 1] = normalizeCell(cell.value);
-        const st = extractCellStyle(cell);
-        if (st) styles[`${rowNumber - 1},${colNumber - 1}`] = st;
-      });
-      for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
-      rows[rowNumber - 1] = arr;
-    });
-    for (let i = 0; i < rows.length; i++) if (rows[i] === undefined) rows[i] = [];
-    sheets.push({
-      name: ws.name || `Sheet${sheets.length + 1}`,
-      rows,
-      styles,
-      colWidths,
-      rowHeights,
-      charts: Array.isArray(chartsBySheet[ws.name]) ? chartsBySheet[ws.name] : []
-    });
-  });
-  if (!sheets.length) sheets.push({ name: 'Sheet1', rows: [], styles: {}, colWidths: {}, rowHeights: {}, charts: [] });
-  return { sheets, active: 0 };
 }
 
 /* ---------------- save ---------------- */
@@ -613,6 +438,9 @@ function saveFilters(kind) {
   if (kind === 'pdf') {
     return [{ name: 'PDF document', extensions: ['pdf'] }];
   }
+  if (kind === 'slides') {
+    return [{ name: 'PowerPoint presentation', extensions: ['pptx'] }];
+  }
   return [
     { name: 'Excel workbook', extensions: ['xlsx'] },
     { name: 'CSV (active sheet)', extensions: ['csv'] }
@@ -622,7 +450,7 @@ function saveFilters(kind) {
 function suggestSavePath(req, documentsDir) {
   const base = (req.suggestedName || 'Untitled').replace(/\.[^.]+$/, '');
   const dir = req.currentPath ? path.dirname(req.currentPath) : documentsDir;
-  const defExt = req.kind === 'md' ? '.md' : req.kind === 'doc' ? '.docx' : req.kind === 'pdf' ? '.pdf' : '.xlsx';
+  const defExt = req.kind === 'md' ? '.md' : req.kind === 'doc' ? '.docx' : req.kind === 'pdf' ? '.pdf' : req.kind === 'slides' ? '.pptx' : '.xlsx';
   return path.join(dir, base + defExt);
 }
 
@@ -731,13 +559,10 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
   if (kind === 'sheet') {
     const sheets = data.sheets && data.sheets.length ? data.sheets : [{ name: 'Sheet1', rows: [] }];
     if (ext === '.xlsx') {
-      const wb = modelToWorkbook(sheets);
-      return atomicWrite(target, (tmp) => wb.xlsx.writeFile(tmp));
+      return atomicWrite(target, (tmp) => sheetIo.writeXlsx(tmp, { ...data, sheets }));
     }
     if (ext === '.csv') {
-      const idx = Math.min(Math.max(data.active || 0, 0), sheets.length - 1);
-      const wb = modelToWorkbook([sheets[idx]]);
-      return atomicWrite(target, (tmp) => wb.csv.writeFile(tmp));
+      return atomicWrite(target, (tmp) => sheetIo.writeCsv(tmp, { ...data, sheets }));
     }
     throw new Error(`Can't save spreadsheet as ${ext}`);
   }
@@ -748,6 +573,14 @@ async function save({ kind, path: target, data, thumbDataUrl }) {
       return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
     }
     throw new Error(`Can't save PDF as ${ext}`);
+  }
+
+  if (kind === 'slides') {
+    if (ext === '.pptx') {
+      const buf = await slides.writePptx(data.deck, titleOf(target));
+      return atomicWrite(target, (tmp) => fsp.writeFile(tmp, buf));
+    }
+    throw new Error(`Can't save a presentation as ${ext}`);
   }
 
   throw new Error(`Unknown document kind: ${kind}`);
@@ -796,20 +629,6 @@ function applyStrikeFences(xml) {
   return out.split(STRIKE_ON).join('').split(STRIKE_OFF).join('');
 }
 
-async function restoreStrikethrough(docxBuf) {
-  try {
-    const zip = await JSZip.loadAsync(docxBuf);
-    const file = zip.file('word/document.xml');
-    if (!file) return docxBuf;
-    const xml = await file.async('string');
-    if (xml.indexOf(STRIKE_ON) < 0) return docxBuf;
-    zip.file('word/document.xml', applyStrikeFences(xml));
-    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  } catch {
-    return docxBuf;
-  }
-}
-
 /* Page dimensions in twips, portrait-oriented: html-to-docx swaps width and
    height itself when the orientation is landscape. Without this every export
    came out US Letter no matter what the document actually was. */
@@ -817,7 +636,8 @@ const PAGE_TWIPS = {
   letter: { width: 12240, height: 15840 },
   a4: { width: 11906, height: 16838 },
   legal: { width: 12240, height: 20160 },
-  executive: { width: 10440, height: 15120 }
+  executive: { width: 10440, height: 15120 },
+  a5: { width: 8391, height: 11906 }
 };
 
 function docxPageSize(layout) {
@@ -1031,7 +851,8 @@ const PAGE_SIZES = [
   { id: 'letter', w: 8.5, h: 11 },
   { id: 'a4', w: 8.27, h: 11.69 },
   { id: 'legal', w: 8.5, h: 14 },
-  { id: 'executive', w: 7.25, h: 10.5 }
+  { id: 'executive', w: 7.25, h: 10.5 },
+  { id: 'a5', w: 5.83, h: 8.27 }
 ];
 // Word's own margin presets, matched by name so the dropdown reflects what the
 // author picked in Word.
@@ -1247,7 +1068,7 @@ ${bodyHtml}
    geometry, header, footer and page numbers it has in Margo, and the same
    content styles as the page in the editor (css/doc.css), so what prints is
    what was on screen. Header and footer use CSS page-margin boxes. */
-const DOC_PAGE_IN = { letter: [8.5, 11], a4: [8.27, 11.69], legal: [8.5, 14], executive: [7.25, 10.5] };
+const DOC_PAGE_IN = { letter: [8.5, 11], a4: [8.27, 11.69], legal: [8.5, 14], executive: [7.25, 10.5], a5: [5.83, 8.27] };
 const DOC_MARGIN_IN = {
   normal: [1, 1, 1, 1], narrow: [0.5, 0.5, 0.5, 0.5], moderate: [0.75, 0.75, 0.75, 0.75], wide: [1, 2, 1, 2]
 };
@@ -1340,173 +1161,10 @@ function escapeHtml(s) {
 /* Full HTML document used for PDF export via printToPDF */
 function htmlForPdfExport({ kind, data, title }) {
   if (kind === 'md') return htmlDocument(marked.parse(data.markdown ?? ''), title);
+  if (kind === 'slides') return slides.exportHtml(data.deck, title);
   if (kind === 'doc') return docHtmlDocument(data.html ?? '<p></p>', title, data.layout);
-  if (kind === 'sheet') {
-    const sheets = (data.sheets && data.sheets.length ? data.sheets : [{ name: 'Sheet1', rows: [] }]);
-    const parts = sheets.map((sheet, i) => {
-      const rows = (sheet.rows || []);
-      const maxCols = rows.reduce((m, r) => Math.max(m, (r || []).length), 1);
-      const body = rows.map((row) =>
-        '<tr>' + Array.from({ length: maxCols }, (_, c) => {
-          const v = row && row[c] != null ? String(row[c]) : '';
-          const num = /^-?[\d,]*\.?\d+%?$/.test(v.trim()) && v.trim() !== '';
-          return `<td${num ? ' class="num"' : ''}>${escapeHtml(v)}</td>`;
-        }).join('') + '</tr>'
-      ).join('');
-      return `${i > 0 ? '<div class="page-break"></div>' : ''}` +
-        `<h2>${escapeHtml(sheet.name || 'Sheet' + (i + 1))}</h2>` +
-        `<table class="sheet">${body || '<tr><td></td></tr>'}</table>`;
-    });
-    return htmlDocument(
-      `<style>
-         table.sheet { border-collapse: collapse; width: 100%; font-size: 11px; }
-         table.sheet td { border: 1px solid #d5d5d2; padding: 4px 8px; }
-         table.sheet td.num { text-align: right; font-variant-numeric: tabular-nums; }
-         table.sheet tr:first-child td { background: #f4f4f2; font-weight: 600; }
-         .page-break { page-break-before: always; }
-         h2 { font-size: 15px; margin: 4px 0 10px; }
-       </style>` + parts.join(''),
-      title
-    );
-  }
+  if (kind === 'sheet') return htmlDocument(sheetIo.pdfBody(data), title);
   throw new Error(`Can't export ${kind} as PDF`);
-}
-
-function sanitizeSheetName(name) {
-  return String(name || '').replace(/[\\\/\?\*\[\]:]/g, ' ').trim().slice(0, 31);
-}
-
-function excelWidthToPx(w) {
-  return Math.round(Number(w) * 7 + 5);
-}
-
-function pxToExcelWidth(px) {
-  return Math.max(1, Math.min(255, (Number(px) - 5) / 7));
-}
-
-const MARGO_META_SHEET = '__MargoMeta__';
-
-function readMargoMeta(wb) {
-  const ws = wb.getWorksheet(MARGO_META_SHEET);
-  if (!ws) return null;
-  try {
-    const raw = ws.getCell(1, 1).value;
-    const text = raw == null ? '' : (typeof raw === 'object' && raw.text != null ? raw.text : String(raw));
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function writeMargoMeta(wb, sheets) {
-  const chartsBySheet = {};
-  sheets.forEach((sheet) => {
-    if (sheet.charts && sheet.charts.length) {
-      chartsBySheet[sheet.name] = sheet.charts;
-    }
-  });
-  if (!Object.keys(chartsBySheet).length) return;
-  const ws = wb.addWorksheet(MARGO_META_SHEET);
-  ws.state = 'veryHidden';
-  ws.getCell(1, 1).value = JSON.stringify({ version: 1, chartsBySheet });
-}
-
-function applyModelCellStyle(cell, st) {
-  if (!st) return;
-  if (st.bold || st.italic || st.underline || st.strike || st.size || st.font || st.color || st.face) {
-    cell.font = excelFontFromStyle(st);
-  }
-  if (st.fill && st.fill !== '#ffffff') {
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF' + st.fill.replace('#', '') }
-    };
-  }
-  if (st.border) {
-    const edgeStyle = st.border === 'thick' ? 'medium' : 'thin';
-    cell.border = {
-      top: { style: edgeStyle },
-      left: { style: edgeStyle },
-      bottom: { style: edgeStyle },
-      right: { style: edgeStyle }
-    };
-  }
-  if (st.align || st.valign || st.wrap) {
-    cell.alignment = {
-      horizontal: st.align || undefined,
-      vertical: st.valign || undefined,
-      wrapText: !!st.wrap
-    };
-  }
-  if (st.numFmt) {
-    cell.numFmt = st.numFmt;
-  }
-}
-
-function modelToWorkbook(sheets) {
-  const wb = new ExcelJS.Workbook();
-  /* The hidden sheet Margo keeps its chart metadata on is added afterwards,
-     so a workbook with a sheet of that name collided with it and the whole
-     save threw. Claiming the name up front renames the author's sheet
-     instead. */
-  const used = new Set([MARGO_META_SHEET.toLowerCase()]);
-  sheets.forEach((sheet, i) => {
-    let name = sanitizeSheetName(sheet.name) || `Sheet${i + 1}`;
-    let unique = name, n = 2;
-    while (used.has(unique.toLowerCase())) unique = `${name.slice(0, 28)} ${n++}`;
-    used.add(unique.toLowerCase());
-
-    const ws = wb.addWorksheet(unique);
-    const explicitColWidths = { ...(sheet.colWidths || {}) };
-    const styles = sheet.styles || {};
-
-    (sheet.rows || []).forEach((row, r) => {
-      (row || []).forEach((val, c) => {
-        if (val === '' || val === null || val === undefined) return;
-        const cell = ws.getCell(r + 1, c + 1);
-        const sVal = String(val);
-        if (sVal.startsWith('=')) {
-          cell.value = { formula: sVal.slice(1) };
-        } else {
-          cell.value = coerceValue(val);
-        }
-        applyModelCellStyle(cell, styles[`${r},${c}`]);
-      });
-    });
-
-    Object.keys(styles).forEach((key) => {
-      const [rStr, cStr] = key.split(',');
-      const r = parseInt(rStr, 10);
-      const c = parseInt(cStr, 10);
-      const row = (sheet.rows || [])[r];
-      const val = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
-      if (val === '' || val === null || val === undefined) {
-        applyModelCellStyle(ws.getCell(r + 1, c + 1), styles[key]);
-      }
-    });
-
-    Object.entries(sheet.rowHeights || {}).forEach(([r, px]) => {
-      const row = ws.getRow(parseInt(r, 10) + 1);
-      if (px) row.height = px * 72 / 96;
-    });
-
-    Object.entries(explicitColWidths).forEach(([c, px]) => {
-      const colNum = parseInt(c, 10) + 1;
-      if (px) ws.getColumn(colNum).width = pxToExcelWidth(px);
-    });
-  });
-  writeMargoMeta(wb, sheets);
-  return wb;
-}
-
-function coerceValue(v) {
-  const s = String(v);
-  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(s.trim())) {
-    const n = Number(s);
-    if (Number.isFinite(n) && Math.abs(n) < Number.MAX_SAFE_INTEGER) return n;
-  }
-  return s;
 }
 
 module.exports = {
@@ -1526,7 +1184,7 @@ module.exports = {
   htmlForPdfExport,
   turndownHtml: (html) => turndown.turndown(html),
   markedParse: (md) => marked.parse(md),
-  normalizeCell,
-  modelToWorkbook,
-  workbookToModel
+  normalizeCell: sheetIo.normalizeCell,
+  modelToWorkbook: sheetIo.modelToWorkbook,
+  workbookToModel: sheetIo.workbookToModel
 };

@@ -344,6 +344,8 @@
       modalReturnFocus = document.activeElement;
     }
     closePalette();
+    closeMenus();
+    closeAccountMenu();
     els.modal.className = 'modal' + (opts && opts.wide ? ' wide' : '') + (opts && opts.className ? ' ' + opts.className : '');
     els.modalTitle.textContent = title;
     els.modalBody.innerHTML = '';
@@ -491,7 +493,6 @@
     document.documentElement.dataset.density = settings.density;
     applySpellcheck(document);
     restartAutosave();
-    persistSession();
     if (els.sideGroupBtn) els.sideGroupBtn.setAttribute('aria-pressed', settings.sideGroup ? 'true' : 'false');
   }
   /* The global switch only ever turns checking off: when it is on, every
@@ -632,6 +633,9 @@
         text = typeof r === 'string' ? r : '';
       } catch { text = ''; }
     }
+    /* An editor that already puts the same line in the left slot through
+       setStatus should not have it shown twice. */
+    if (text && t.statusLeft && t.statusLeft.textContent.trim() === text.trim()) text = '';
     t.status.setInfo(text);
   }
   let statusInfoTimer = null;
@@ -939,6 +943,7 @@
     if (draft.kind === 'pdf') {
       return { kind: 'pdf', name, path: p, placements: data.placements || [], base64: data.base64 || null };
     }
+    if (draft.kind === 'slides') return { kind: 'slides', name, path: p, deck: data.deck || null };
     return null;
   }
   async function restoreDrafts(list) {
@@ -1070,6 +1075,8 @@
     const has = state.tabs.length > 0;
     bar.classList.toggle('hidden', !has);
     if (els.tabNew) els.tabNew.classList.toggle('hidden', !has);
+    const titlebar = document.getElementById('titlebar');
+    if (titlebar) titlebar.classList.toggle('many-tabs', state.tabs.length > 3);
     state.tabs.forEach((t) => {
       const active = t.id === state.activeTabId && state.view === 'editor';
       const el = document.createElement('div');
@@ -1554,7 +1561,7 @@
     if (kind === 'sheet') return { kind: 'sheet', name: 'Untitled.xlsx', path: null, sheets: [{ name: 'Sheet1', rows: [] }], active: 0 };
     const factory = window.MargoEditors && window.MargoEditors[kind];
     if (factory && typeof factory.blankDoc === 'function') return factory.blankDoc();
-    if (kind === 'slides' && factory) return { kind: 'slides', name: 'Untitled.pptx', path: null, slides: [] };
+    if (kind === 'slides' && factory) return { kind: 'slides', name: 'Untitled.pptx', path: null, deck: null };
     return null;
   }
 
@@ -1870,6 +1877,11 @@
 
   async function printDoc() {
     if (!state.doc || !state.editor) return false;
+    /* An editor that prints for itself (the PDF editor sends its current
+       bytes, unsaved edits included, rather than the file on disk). */
+    if (state.editor.commands && typeof state.editor.commands.print === 'function') {
+      return !!(await state.editor.commands.print());
+    }
     const data = await Promise.resolve(state.editor.getData());
     const res = await window.margo.print({
       kind: state.doc.kind,
@@ -1921,6 +1933,7 @@
         name: fileName,
         fromPath: fromPath || toPath
       });
+      noteGoogleSignedOut(drive);
       if (quiet) return;
       if (drive && drive.pushed) {
         toast('Saved locally and on Drive', 'success');
@@ -1981,6 +1994,7 @@
           toast(((res && res.error) || 'Save failed') + (o.auto ? ' (autosave)' : ''), 'error');
           return false;
         }
+        t.orphaned = false;
         await finishSaved(t, data, gen, !!o.auto);
         await afterLocalSave(path, name, path, !!o.auto);
         await refreshLibraryThumbFor(doc, data);
@@ -2045,6 +2059,8 @@
   let autosaveTimer = null;
   function autosaveEligible(t) {
     if (!t || !t.doc || !t.doc.path) return false;
+    /* A file deleted on disk is not quietly recreated in the background. */
+    if (t.orphaned) return false;
     if (t.doc.kind === 'pdf') return false;
     const ext = extOf(t.doc.path);
     if (ext === 'csv') return false;
@@ -2100,7 +2116,7 @@
     pdf: 'pdf',
     pptx: 'slides'
   };
-  const THUMB_EXTS = new Set(['docx', 'pdf', 'xlsx', 'csv']);
+  const THUMB_EXTS = new Set(['docx', 'pdf', 'xlsx', 'csv', 'pptx']);
   function recentWantsContentThumb(r) {
     return THUMB_EXTS.has(r.ext);
   }
@@ -2625,7 +2641,24 @@
     if (sidebarPinned || sidebarResizing) return;
     clearTimeout(sideTimer);
     if (immediate) { els.sidebar.classList.remove('open'); return; }
-    sideTimer = setTimeout(() => els.sidebar.classList.remove('open'), 240);
+    /* It used to slide away while the author was still typing in its
+       filter box, or while a right-click menu opened from it was up. */
+    sideTimer = setTimeout(() => {
+      const a = document.activeElement;
+      if (a && els.sidebar.contains(a) && a.matches('input')) return;
+      if (document.querySelector('.ctx-menu')) return;
+      els.sidebar.classList.remove('open');
+    }, 240);
+  }
+  /* Keyboard route into the library: slides it out (in the editor) and puts
+     the caret in its filter; on the home screen the filter is the home one. */
+  function focusLibrarySearch() {
+    if (state.view === 'home') {
+      if (els.homeSearch) { els.homeSearch.focus(); els.homeSearch.select(); }
+      return;
+    }
+    openSidebar();
+    setTimeout(() => { els.sideSearch.focus(); els.sideSearch.select(); }, 30);
   }
   function toggleSidebarPin() {
     sidebarPinned = !sidebarPinned;
@@ -2636,6 +2669,10 @@
   els.hotzone.addEventListener('mouseenter', openSidebar);
   els.sidebar.addEventListener('mouseenter', openSidebar);
   els.sidebar.addEventListener('mouseleave', () => closeSidebar());
+  els.sidebar.addEventListener('focusout', (e) => {
+    if (els.sidebar.contains(e.relatedTarget) || els.sidebar.matches(':hover')) return;
+    closeSidebar();
+  });
   els.pinBtn.addEventListener('click', toggleSidebarPin);
 
   const resizeEl = $('side-resize');
@@ -2669,32 +2706,137 @@
     });
   }
 
-  /* ---------------- menu bar ---------------- */
+  /* ---------------- keyboard shortcuts dialog ---------------- */
+  function shortcutGroups() {
+    const def = NEW_KINDS.find((k) => k.kind === settings.defaultKind) || NEW_KINDS[0];
+    return [
+      { title: 'General', rows: [
+        ['Command palette', ['Ctrl', 'K'], ['Ctrl', 'Shift', 'P']],
+        ['New ' + def.label.toLowerCase(), ['Ctrl', 'N']],
+        ['Open a file', ['Ctrl', 'O']],
+        ['Save', ['Ctrl', 'S']],
+        ['Save as…', ['Ctrl', 'Shift', 'S']],
+        ['Save all', ['Ctrl', 'Alt', 'S']],
+        ['Export as PDF', ['Ctrl', 'E']],
+        ['Print', ['Ctrl', 'P']],
+        ['Settings', ['Ctrl', ',']],
+        ['Keyboard shortcuts', ['Ctrl', '/']],
+        ['Open a menu', ['Alt', 'F']],
+        ['Menu bar', ['F10']]
+      ] },
+      { title: 'Tabs', rows: [
+        ['Next tab', ['Ctrl', 'Tab'], ['Ctrl', 'PgDn']],
+        ['Previous tab', ['Ctrl', 'Shift', 'Tab'], ['Ctrl', 'PgUp']],
+        ['Go to tab 1–8', ['Ctrl', '1…8']],
+        ['Go to last tab', ['Ctrl', '9']],
+        ['Close tab', ['Ctrl', 'W']],
+        ['Reopen closed tab', ['Ctrl', 'Shift', 'T']]
+      ] },
+      { title: 'Editing', rows: [
+        ['Undo', ['Ctrl', 'Z']],
+        ['Redo', ['Ctrl', 'Y'], ['Ctrl', 'Shift', 'Z']],
+        ['Cut / copy / paste', ['Ctrl', 'X / C / V']],
+        ['Select all', ['Ctrl', 'A']],
+        ['Find & replace', ['Ctrl', 'F']],
+        ['Bold / italic / underline', ['Ctrl', 'B / I / U']],
+        ['Page break (document)', ['Ctrl', 'Enter']]
+      ] },
+      { title: 'View', rows: [
+        ['Zoom in', ['Ctrl', '+']],
+        ['Zoom out', ['Ctrl', '-']],
+        ['Reset zoom', ['Ctrl', '0']],
+        ['Pin or unpin the library', ['Ctrl', '\\']],
+        ['Leave focus mode', ['Esc']]
+      ] },
+      { title: 'Spreadsheet', rows: [
+        ['Commit and move down / right', ['Enter'], ['Tab']],
+        ['Edit the selected cell', ['F2']],
+        ['Move the selection', ['Arrows']],
+        ['Extend the selection', ['Shift', 'Arrows']]
+      ] },
+      { title: 'Presentation', rows: [
+        ['Start the slide show', ['F5']],
+        ['Slide show from the current slide', ['Shift', 'F5']],
+        ['New slide', ['Ctrl', 'M']],
+        ['Duplicate selection or slide', ['Ctrl', 'D']],
+        ['Edit the selected text box', ['Enter'], ['F2']],
+        ['Nudge the selection (10 px with Shift)', ['Arrows']],
+        ['Bring forward / send backward', ['Ctrl', '↑'], ['Ctrl', '↓']],
+        ['Next / previous slide in the show', ['→'], ['←']],
+        ['End the slide show', ['Esc']]
+      ] }
+    ];
+  }
+  function keysHtml(combo) {
+    return combo.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('');
+  }
   function showShortcuts() {
-    const div = document.createElement('div');
-    div.className = 'shortcut-list';
-    div.innerHTML = [
-      ['Ctrl+O', 'Open a file'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save As…'],
-      ['Ctrl+E', 'Export as PDF'], ['Ctrl+P', 'Print'],
-      ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Cycle tabs'],
-      ['Ctrl+B / Ctrl+I', 'Bold / italic while editing'],
-      ['Ctrl+F', 'Find in document'],
-      ['Ctrl++ / Ctrl+- / Ctrl+0', 'Zoom in / out / reset'],
-      ['Enter / Tab', 'Commit cell & move (spreadsheet)'],
-      ['F2', 'Edit selected cell'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo']
-    ].map(([k, v]) => `<kbd>${k}</kbd><span>${v}</span>`).join('');
-    openModal('Keyboard shortcuts', div, [{ label: 'Close', primary: true, value: null }]);
+    const panel = document.createElement('div');
+    panel.className = 'shortcuts-panel';
+    const search = document.createElement('label');
+    search.className = 'search-field';
+    search.innerHTML = `<span class="search-field-icon">${ICONS.search}</span>`;
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.placeholder = 'Search shortcuts';
+    input.setAttribute('aria-label', 'Search shortcuts');
+    search.appendChild(input);
+    const scroll = document.createElement('div');
+    scroll.className = 'shortcuts-scroll';
+    const paint = () => {
+      const q = input.value.trim().toLowerCase();
+      scroll.innerHTML = '';
+      let shown = 0;
+      shortcutGroups().forEach((g) => {
+        const rows = g.rows.filter(([label, ...combos]) => !q
+          || label.toLowerCase().includes(q)
+          || combos.some((c) => c.join('+').toLowerCase().includes(q)));
+        if (!rows.length) return;
+        const group = document.createElement('div');
+        group.className = 'shortcut-group';
+        const h = document.createElement('h4');
+        h.textContent = g.title;
+        group.appendChild(h);
+        rows.forEach(([label, ...combos]) => {
+          const row = document.createElement('div');
+          row.className = 'shortcut-row';
+          const l = document.createElement('span');
+          l.textContent = label;
+          const keys = document.createElement('span');
+          keys.className = 'shortcut-keys';
+          keys.innerHTML = combos.map(keysHtml).join('<span>or</span>');
+          row.appendChild(l);
+          row.appendChild(keys);
+          group.appendChild(row);
+          shown += 1;
+        });
+        scroll.appendChild(group);
+      });
+      if (!shown) {
+        const empty = document.createElement('div');
+        empty.className = 'shortcuts-empty';
+        empty.textContent = 'No shortcut matches that search.';
+        scroll.appendChild(empty);
+      }
+    };
+    input.addEventListener('input', paint);
+    paint();
+    panel.appendChild(search);
+    panel.appendChild(scroll);
+    openModal('Keyboard shortcuts', panel, [{ label: 'Close', primary: true, value: null }],
+      { wide: true, className: 'shortcuts-modal', initialFocus: input });
   }
   async function showAbout() {
     const div = document.createElement('div');
-    div.style.textAlign = 'center';
-    const version = await window.margo.version();
+    div.className = 'about-panel';
+    let version = '';
+    try { version = await window.margo.version(); } catch {}
     div.innerHTML =
-      `<div style="display:flex;justify-content:center;margin:4px 0 10px"><img src="../../assets/icon.png" width="64" height="64" alt="" style="object-fit:contain"></div>` +
-      `<div style="font-size:16px;font-weight:700;color:var(--text)">Margo ${version}</div>` +
-      `<div style="margin-top:4px">A friendly home for your documents.</div>` +
-      `<div style="margin-top:10px;font-size:11.5px;color:var(--text-faint)">Made by Sounak</div>`;
-    openModal('About', div, [{ label: 'Close', primary: true, value: null }]);
+      '<img src="../../assets/icon.png" width="64" height="64" alt="">' +
+      `<div class="about-name">Margo ${escapeHtml(version)}</div>` +
+      '<div class="about-tag">A friendly home for your documents.</div>' +
+      '<div class="about-by">Made by Sounak</div>';
+    openModal('About Margo', div, [{ label: 'Close', primary: true, value: null }]);
   }
 
   let updateStatus = { state: 'idle', packaged: false, currentVersion: '', version: null, percent: null, message: null };
@@ -2716,7 +2858,7 @@
 
   function paintSettings(st) {
     if (!settingsLive) return;
-    settingsLive.version.textContent = st.currentVersion || '—';
+    settingsLive.version.textContent = st.currentVersion || settingsLive.version.textContent || '—';
     settingsLive.status.textContent = updateStatusLabel(st);
     const busy = st.state === 'checking' || st.state === 'downloading';
     settingsLive.check.disabled = busy;
@@ -2724,7 +2866,7 @@
   }
 
   async function promptRestart(version) {
-    if (!els.modalBackdrop.classList.contains('hidden')) return;
+    if (isModalOpen()) return;
     const div = document.createElement('div');
     div.className = 'modal-lead';
     div.textContent = version
@@ -2745,45 +2887,219 @@
       promptedForVersion = tag;
       toast(updateStatus.version
         ? `Update ${updateStatus.version} is ready — restart to install.`
-        : 'An update is ready — restart to install.');
+        : 'An update is ready — restart to install.', 'info');
       promptRestart(updateStatus.version);
     }
   }
 
   window.margo.updates.onStatus((st) => applyUpdateStatus(st));
 
-  async function showSettings(andCheck) {
-    const st = await window.margo.updates.status();
+  /* ---------------- settings dialog ---------------- */
+  function settingsRow(label, desc, control) {
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+    const text = document.createElement('div');
+    text.className = 'settings-row-text';
+    const l = document.createElement('span');
+    l.className = 'settings-label';
+    l.textContent = label;
+    text.appendChild(l);
+    if (desc) {
+      const d = document.createElement('span');
+      d.className = 'settings-desc';
+      d.textContent = desc;
+      text.appendChild(d);
+    }
+    row.appendChild(text);
+    if (control) {
+      const c = document.createElement('div');
+      c.className = 'settings-control';
+      c.appendChild(control);
+      row.appendChild(c);
+    }
+    return row;
+  }
+  function switchControl(checked, label, onChange) {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'switch';
+    input.checked = !!checked;
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-label', label);
+    input.addEventListener('change', () => onChange(input.checked));
+    return input;
+  }
+  function selectControl(options, value, label, onChange) {
+    const sel = document.createElement('select');
+    sel.className = 'select';
+    sel.setAttribute('aria-label', label);
+    options.forEach(([v, text]) => {
+      const o = document.createElement('option');
+      o.value = String(v);
+      o.textContent = text;
+      if (String(v) === String(value)) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => onChange(sel.value));
+    return sel;
+  }
+  function segmentedControl(options, value, label, onChange) {
+    const seg = document.createElement('div');
+    seg.className = 'segmented';
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-label', label);
+    options.forEach(([v, text]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.dataset.value = v;
+      b.setAttribute('role', 'radio');
+      const paint = (cur) => {
+        b.classList.toggle('active', cur === v);
+        b.setAttribute('aria-checked', cur === v ? 'true' : 'false');
+      };
+      paint(value);
+      b.addEventListener('click', () => {
+        seg.querySelectorAll('button').forEach((x) => {
+          x.classList.toggle('active', x === b);
+          x.setAttribute('aria-checked', x === b ? 'true' : 'false');
+        });
+        onChange(v);
+      });
+      seg.appendChild(b);
+    });
+    return seg;
+  }
+  function themeCard(t) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'theme-card' + (state.theme === t.id ? ' active' : '');
+    card.dataset.theme = t.id;
+    card.title = t.label;
+    const sw = t.swatch || { bg: t.chrome.bg, surface: t.chrome.bar, text: t.chrome.fg, accent: '#f5b301' };
+    const prev = document.createElement('span');
+    prev.className = 'theme-preview';
+    prev.style.background = sw.bg;
+    prev.innerHTML =
+      `<i style="left:0;top:0;bottom:0;width:26%;background:${sw.surface};opacity:.9;border-radius:0"></i>` +
+      `<i style="left:34%;top:18%;width:40%;height:5px;background:${sw.text};opacity:.85"></i>` +
+      `<i style="left:34%;top:38%;width:54%;height:4px;background:${sw.text};opacity:.35"></i>` +
+      `<i style="left:34%;top:54%;width:46%;height:4px;background:${sw.text};opacity:.35"></i>` +
+      `<i style="left:34%;bottom:14%;width:22%;height:9px;background:${sw.accent};border-radius:3px"></i>` +
+      `<i style="left:7%;top:18%;width:12%;height:4px;background:${sw.text};opacity:.4"></i>` +
+      `<i style="left:7%;top:34%;width:12%;height:4px;background:${sw.text};opacity:.25"></i>`;
+    const name = document.createElement('span');
+    name.className = 'theme-name';
+    const label = document.createElement('span');
+    label.textContent = t.label;
+    name.appendChild(label);
+    const tick = document.createElement('span');
+    tick.className = 'theme-tick';
+    if (state.theme === t.id) tick.innerHTML = ICONS.check;
+    name.appendChild(tick);
+    card.appendChild(prev);
+    card.appendChild(name);
+    card.addEventListener('click', () => {
+      applyTheme(t.id, true);
+      card.parentElement.querySelectorAll('.theme-card').forEach((c) => {
+        const on = c.dataset.theme === t.id;
+        c.classList.toggle('active', on);
+        const tk = c.querySelector('.theme-tick');
+        if (tk) tk.innerHTML = on ? ICONS.check : '';
+      });
+    });
+    return card;
+  }
+
+  async function showSettings(andCheck, startPage) {
+    let st = null;
+    try { st = await window.margo.updates.status(); } catch {}
     updateStatus = st || updateStatus;
-    const version = updateStatus.currentVersion || await window.margo.version();
-
-    const panel = document.createElement('div');
-    panel.className = 'settings-panel';
-
-    const verRow = document.createElement('div');
-    verRow.className = 'settings-row';
-    const verLabel = document.createElement('span');
-    verLabel.className = 'settings-label';
-    verLabel.textContent = 'Version';
-    const verValue = document.createElement('span');
-    verValue.className = 'settings-value';
-    verValue.textContent = version;
-    verRow.appendChild(verLabel);
-    verRow.appendChild(verValue);
-
+    let version = updateStatus.currentVersion || '';
+    if (!version) { try { version = await window.margo.version(); } catch {} }
     const gStatus = await refreshGoogle();
-    const gRow = document.createElement('div');
-    gRow.className = 'settings-row';
-    const gLabel = document.createElement('span');
-    gLabel.className = 'settings-label';
-    gLabel.textContent = 'Google';
+
+    const layout = document.createElement('div');
+    layout.className = 'settings-layout';
+    const nav = document.createElement('nav');
+    nav.className = 'settings-nav';
+    nav.setAttribute('aria-label', 'Settings sections');
+    const pagesEl = document.createElement('div');
+    pagesEl.className = 'settings-pages';
+    layout.appendChild(nav);
+    layout.appendChild(pagesEl);
+
+    /* Appearance */
+    const pAppearance = document.createElement('div');
+    const h1 = document.createElement('h4');
+    h1.textContent = 'Theme';
+    const grid = document.createElement('div');
+    grid.className = 'theme-grid';
+    window.MargoThemes.list.forEach((t) => grid.appendChild(themeCard(t)));
+    pAppearance.appendChild(h1);
+    pAppearance.appendChild(grid);
+    const h1b = document.createElement('h4');
+    h1b.textContent = 'Layout';
+    pAppearance.appendChild(h1b);
+    pAppearance.appendChild(settingsRow('Density', 'Compact fits more on screen; comfortable gives controls more room.',
+      segmentedControl([['comfortable', 'Comfortable'], ['compact', 'Compact']], settings.density, 'Density',
+        (v) => updateSettings({ density: v }))));
+    pAppearance.appendChild(settingsRow('Keep the library open', 'Pin the file library to the side of the editor instead of sliding it in from the edge.',
+      switchControl(sidebarPinned, 'Keep the library open', (on) => { if (on !== sidebarPinned) toggleSidebarPin(); })));
+
+    /* Editing */
+    const pEditing = document.createElement('div');
+    const h2 = document.createElement('h4');
+    h2.textContent = 'Editing';
+    pEditing.appendChild(h2);
+    pEditing.appendChild(settingsRow('Check spelling', 'Underline misspelled words while you type.',
+      switchControl(settings.spellcheck, 'Check spelling', (on) => updateSettings({ spellcheck: on }))));
+    pEditing.appendChild(settingsRow('New file type', 'What Ctrl+N and the + button next to the tabs create.',
+      selectControl(availableKinds().map((k) => [k.kind, k.long]), settings.defaultKind, 'New file type',
+        (v) => updateSettings({ defaultKind: v }))));
+
+    /* Files & saving */
+    const pFiles = document.createElement('div');
+    const h3 = document.createElement('h4');
+    h3.textContent = 'Saving';
+    pFiles.appendChild(h3);
+    const intervalSel = selectControl(AUTOSAVE_CHOICES.map((s) => [s, s < 60 ? `Every ${s} seconds` : s === 60 ? 'Every minute' : `Every ${s / 60} minutes`]),
+      settings.autosaveSec, 'Autosave interval', (v) => updateSettings({ autosaveSec: Number(v) }));
+    intervalSel.disabled = !settings.autosave;
+    pFiles.appendChild(settingsRow('Autosave', 'Save documents that already have a file in the background. New documents, PDFs and CSV files are never saved without you.',
+      switchControl(settings.autosave, 'Autosave', (on) => {
+        updateSettings({ autosave: on });
+        intervalSel.disabled = !on;
+        state.tabs.forEach(refreshSaveState);
+      })));
+    pFiles.appendChild(settingsRow('Autosave interval', null, intervalSel));
+    const h3b = document.createElement('h4');
+    h3b.textContent = 'Startup';
+    pFiles.appendChild(h3b);
+    pFiles.appendChild(settingsRow('Reopen documents from last time', 'When Margo starts, open the tabs that were open when it closed.',
+      switchControl(settings.reopenSession, 'Reopen documents from last time', (on) => updateSettings({ reopenSession: on }))));
+    const h3c = document.createElement('h4');
+    h3c.textContent = 'Library';
+    pFiles.appendChild(h3c);
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn ghost';
+    clearBtn.textContent = 'Clear list';
+    clearBtn.addEventListener('click', async () => {
+      await window.margo.recents.clear();
+      loadRecents();
+      toast('Recent files cleared');
+    });
+    pFiles.appendChild(settingsRow('Recent files', 'Remove every file from the recent list. The files themselves are not touched.', clearBtn));
+
+    /* Account */
+    const pAccount = document.createElement('div');
+    const h4 = document.createElement('h4');
+    h4.textContent = 'Google';
+    pAccount.appendChild(h4);
     const gValue = document.createElement('span');
     gValue.className = 'settings-value';
     gValue.textContent = gStatus.signedIn ? (gStatus.email || 'Signed in') : 'Not signed in';
-    gRow.appendChild(gLabel);
-    gRow.appendChild(gValue);
-    const gActions = document.createElement('div');
-    gActions.className = 'settings-actions';
     const gBtn = document.createElement('button');
     gBtn.type = 'button';
     gBtn.className = 'btn ghost';
@@ -2801,29 +3117,34 @@
         gBtn.textContent = 'Sign out';
       }
     });
-    gActions.appendChild(gBtn);
+    const gRow = settingsRow('Google account', 'Share files through Google Drive and open them again from any computer.', gBtn);
+    gRow.querySelector('.settings-row-text').appendChild(gValue);
+    gValue.style.textAlign = 'left';
+    pAccount.appendChild(gRow);
 
-    const stRow = document.createElement('div');
-    stRow.className = 'settings-row';
-    const stLabel = document.createElement('span');
-    stLabel.className = 'settings-label';
-    stLabel.textContent = 'Updates';
+    /* About & updates */
+    const pAbout = document.createElement('div');
+    const h5 = document.createElement('h4');
+    h5.textContent = 'Margo';
+    pAbout.appendChild(h5);
+    const verValue = document.createElement('span');
+    verValue.className = 'settings-value';
+    verValue.textContent = version || '—';
+    pAbout.appendChild(settingsRow('Version', null, verValue));
     const stValue = document.createElement('span');
     stValue.className = 'settings-value';
     stValue.textContent = updateStatusLabel(updateStatus);
-    stRow.appendChild(stLabel);
-    stRow.appendChild(stValue);
-
+    pAbout.appendChild(settingsRow('Updates', null, stValue));
     const note = document.createElement('p');
     note.className = 'settings-note';
     note.textContent = 'Updates apply to the installed app only. Running with npm start will not download new versions.';
-
     const actions = document.createElement('div');
     actions.className = 'settings-actions';
+    actions.style.marginTop = '12px';
     const checkBtn = document.createElement('button');
     checkBtn.className = 'btn ghost';
     checkBtn.type = 'button';
-    checkBtn.textContent = 'Check for updates';
+    checkBtn.innerHTML = `<span class="btn-icon">${ICONS.refresh}</span><span>Check for updates</span>`;
     checkBtn.addEventListener('click', () => { window.margo.updates.check(); });
     const installBtn = document.createElement('button');
     installBtn.className = 'btn primary hidden';
@@ -2832,19 +3153,48 @@
     installBtn.addEventListener('click', () => window.margo.updates.install());
     actions.appendChild(checkBtn);
     actions.appendChild(installBtn);
+    pAbout.appendChild(note);
+    pAbout.appendChild(actions);
 
-    panel.appendChild(verRow);
-    panel.appendChild(gRow);
-    panel.appendChild(gActions);
-    panel.appendChild(stRow);
-    panel.appendChild(note);
-    panel.appendChild(actions);
+    const pages = [
+      ['appearance', 'Appearance', 'palette', pAppearance],
+      ['editing', 'Editing', 'pen', pEditing],
+      ['files', 'Files & saving', 'save', pFiles],
+      ['account', 'Account', 'user', pAccount],
+      ['about', 'About & updates', 'info', pAbout]
+    ];
+    const show = (id) => {
+      pages.forEach(([pid, , , el]) => { el.hidden = pid !== id; });
+      nav.querySelectorAll('button').forEach((b) => {
+        b.classList.toggle('active', b.dataset.page === id);
+        b.setAttribute('aria-current', b.dataset.page === id ? 'page' : 'false');
+      });
+      pagesEl.scrollTop = 0;
+    };
+    pages.forEach(([id, label, icon, el]) => {
+      el.className = 'settings-page';
+      el.dataset.page = id;
+      pagesEl.appendChild(el);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.page = id;
+      b.innerHTML = ICONS[icon] || '';
+      const s = document.createElement('span');
+      s.textContent = label;
+      b.appendChild(s);
+      b.addEventListener('click', () => show(id));
+      nav.appendChild(b);
+    });
+    show(startPage || (andCheck ? 'about' : 'appearance'));
 
     settingsLive = { version: verValue, status: stValue, check: checkBtn, install: installBtn };
     paintSettings(updateStatus);
-    const closed = openModal('Settings', panel, [{ label: 'Close', primary: true, value: null }]);
+    const closed = openModal('Settings', layout, [{ label: 'Done', primary: true, value: null }],
+      { className: 'xwide settings-modal' });
     closed.then(() => { settingsLive = null; });
     if (andCheck) window.margo.updates.check();
+    /* Resolves once the dialog is up, not when it closes - callers (and the
+       smoke suite) await it to know the dialog is on screen. */
   }
 
   let googleStatus = { signedIn: false, configured: false, email: '', name: '', pictureDataUrl: null, initials: 'G' };
@@ -2862,13 +3212,19 @@
     } else if (googleStatus.signedIn) {
       av.textContent = googleStatus.initials || 'G';
     } else {
-      av.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="6" r="2.2"/><path d="M3.5 13c.6-2.2 2.3-3.2 4.5-3.2s3.9 1 4.5 3.2"/></svg>';
+      av.innerHTML = ICONS.user;
     }
     if (els.btnAccount) {
       els.btnAccount.title = googleStatus.signedIn
         ? (googleStatus.email || 'Google account')
         : 'Sign in with Google';
     }
+  }
+
+  /* Main reports signedOut:true when Google revoked the session mid-call;
+     the avatar and menus follow it straight away. */
+  function noteGoogleSignedOut(res) {
+    if (res && res.signedOut) refreshGoogle();
   }
 
   async function refreshGoogle() {
@@ -2913,16 +3269,19 @@
     email.textContent = googleStatus.email || googleStatus.name || 'Signed in';
     const shareBtn = document.createElement('button');
     shareBtn.type = 'button';
-    shareBtn.textContent = 'Share this file…';
+    shareBtn.innerHTML = ICONS.share + '<span></span>';
+    shareBtn.lastChild.textContent = 'Share this file…';
     shareBtn.disabled = !(state.view === 'editor' && state.doc);
     shareBtn.addEventListener('click', () => { closeAccountMenu(); shareDoc(); });
     const openDriveBtn = document.createElement('button');
     openDriveBtn.type = 'button';
-    openDriveBtn.textContent = 'Open from Drive…';
+    openDriveBtn.innerHTML = ICONS.cloud + '<span></span>';
+    openDriveBtn.lastChild.textContent = 'Open from Drive…';
     openDriveBtn.addEventListener('click', () => { closeAccountMenu(); showOpenFromDrive(); });
     const outBtn = document.createElement('button');
     outBtn.type = 'button';
-    outBtn.textContent = 'Sign out';
+    outBtn.innerHTML = ICONS.logout + '<span></span>';
+    outBtn.lastChild.textContent = 'Sign out';
     outBtn.addEventListener('click', async () => {
       closeAccountMenu();
       await window.margo.google.signOut();
@@ -3116,6 +3475,7 @@
     panel.appendChild(wait);
     const closed = openModal('Share', panel, [{ label: 'Close', primary: true, value: null }], { wide: true });
     const res = await window.margo.google.share({ path: state.doc.path, name: state.doc.name });
+    noteGoogleSignedOut(res);
     if (!res.ok) {
       wait.textContent = res.error || 'Upload failed';
       wait.style.color = 'var(--danger)';
@@ -3180,6 +3540,7 @@
     panel.appendChild(wait);
     const closed = openModal('Open from Drive', panel, [{ label: 'Close', primary: true, value: null }], { wide: true });
     const res = await window.margo.google.list();
+    noteGoogleSignedOut(res);
     if (!res.ok) {
       wait.textContent = res.error || 'Could not list Drive files';
       wait.style.color = 'var(--danger)';
@@ -3224,156 +3585,715 @@
     showSettings(true);
   }
 
+  /* ---------------- application menu ----------------
+     Also the source of the command palette: every enabled item (submenus
+     included) becomes a palette command, so the two never drift apart. */
+  /* A run of menu rows for one set of document kinds, led by a separator;
+     empty when another kind (or nothing) is in front. */
+  function onlyFor(kind, kinds, items) {
+    return kind && kinds.includes(kind) ? [{ sep: true }].concat(items) : [];
+  }
+  const EC = (ed, name, ...args) => ed && ed.commands && typeof ed.commands[name] === 'function' && ed.commands[name](...args);
   function menuSpec() {
     const hasDoc = state.view === 'editor' && !!state.doc;
     const kind = hasDoc ? state.doc.kind : null;
     const ed = state.editor;
     return [
       { label: 'File', items: [
-        { label: 'New', submenu: [
-          { label: 'Markdown note', action: () => newDocGuarded('md') },
-          { label: 'Word document', action: () => newDocGuarded('doc') },
-          { label: 'Spreadsheet', action: () => newDocGuarded('sheet') },
-          { label: 'PDF document', action: () => newDocGuarded('pdf') }
-        ] },
-        { label: 'Open…', accel: 'Ctrl+O', action: pickAndOpen },
-        { label: 'Open from Drive…', action: showOpenFromDrive },
-        { label: 'Open Recent', enabled: lastRecents.length > 0, submenu: () =>
-          lastRecents.slice(0, 8).map((r) => ({ label: r.name, action: () => openFromPath(r.path) }))
-            .concat([{ sep: true }, { label: 'Clear recents', action: async () => { await window.margo.recents.clear(); loadRecents(); } }])
+        { label: 'New', icon: ICONS.plus, submenu: () => availableKinds().map((k) => ({
+          label: k.long,
+          icon: ICONS[KIND_ICON[k.kind]],
+          accel: k.kind === settings.defaultKind ? 'Ctrl+N' : undefined,
+          action: () => newDocGuarded(k.kind)
+        })).concat([{ sep: true }, { heading: 'From a template' }]).concat(TEMPLATES.filter((t) => kindAvailable(t.kind)).map((t) => ({
+          label: t.label,
+          icon: ICONS[t.icon],
+          action: () => newFromTemplate(t.id)
+        }))) },
+        { label: 'Open…', accel: 'Ctrl+O', icon: ICONS.folderOpen, action: pickAndOpen },
+        { label: 'Open from Drive…', icon: ICONS.cloud, action: showOpenFromDrive },
+        { label: 'Open Recent', icon: ICONS.clock, paletteSkip: true, enabled: lastRecents.length > 0, submenu: () =>
+          lastRecents.slice(0, 10).map((r) => ({ label: r.name, icon: ICONS[KIND_ICON[recentKind(r)]] || ICONS.file, action: () => openFromPath(r.path) }))
+            .concat([{ sep: true }, { label: 'Clear recents', icon: ICONS.trash, action: async () => { await window.margo.recents.clear(); loadRecents(); } }])
         },
+        { label: 'Reopen Closed Tab', accel: 'Ctrl+Shift+T', icon: ICONS.refresh, enabled: state.closedPaths.length > 0, action: reopenClosedTab },
         { sep: true },
-        { label: 'Save', accel: 'Ctrl+S', enabled: hasDoc, action: () => saveDoc(false) },
-        { label: 'Save As…', accel: 'Ctrl+Shift+S', enabled: hasDoc, action: () => saveDoc(true) },
-        { label: 'Export as PDF…', accel: 'Ctrl+E', enabled: hasDoc && kind !== 'pdf', action: () => exportPdf() },
-        { label: 'Print…', accel: 'Ctrl+P', enabled: hasDoc, action: () => printDoc() },
-        { label: 'Export Images…', enabled: hasDoc && (kind === 'doc' || kind === 'pdf'), action: () => {
-          if (kind === 'doc' && ed && ed.commands && ed.commands.extractImages) ed.commands.extractImages();
-          else if (kind === 'pdf' && ed && ed.commands && ed.commands.showImages) ed.commands.showImages();
+        { label: 'Save', accel: 'Ctrl+S', icon: ICONS.save, enabled: hasDoc, action: () => saveDoc(false) },
+        { label: 'Save As…', accel: 'Ctrl+Shift+S', icon: ICONS.saveAs, enabled: hasDoc, action: () => saveDoc(true) },
+        { label: 'Save All', accel: 'Ctrl+Alt+S', enabled: state.tabs.some((t) => t.dirty || (t.id === state.activeTabId && state.dirty)), action: saveAllTabs },
+        { sep: true },
+        { label: 'Export as PDF…', accel: 'Ctrl+E', icon: ICONS.exportPdf, enabled: hasDoc && kind !== 'pdf', action: () => exportPdf() },
+        { label: 'Print…', accel: 'Ctrl+P', icon: ICONS.print, enabled: hasDoc, action: () => printDoc() },
+        { label: 'Export Images…', icon: ICONS.imageStack, enabled: hasDoc && (kind === 'doc' || kind === 'pdf'), action: () => {
+          if (kind === 'doc') EC(ed, 'extractImages');
+          else if (kind === 'pdf') EC(ed, 'showImages');
         } },
         { sep: true },
-        { label: 'Share…', enabled: hasDoc, action: shareDoc },
+        { label: 'Share…', icon: ICONS.share, enabled: hasDoc, action: shareDoc },
         { sep: true },
-        { label: 'Close document', accel: 'Ctrl+W', enabled: hasDoc, action: closeActiveTab },
-        { label: 'Exit', action: () => window.margo.quit() }
+        { label: 'Close document', accel: 'Ctrl+W', icon: ICONS.close, enabled: hasDoc, action: closeActiveTab },
+        { label: 'Close All', enabled: state.tabs.length > 0, action: closeAllTabs },
+        { label: 'Exit', icon: ICONS.logout, action: () => window.margo.quit() }
       ] },
       { label: 'Edit', items: [
-        { label: 'Undo', accel: 'Ctrl+Z', enabled: hasDoc && !!(ed && ed.commands && ed.commands.canUndo && ed.commands.canUndo()), action: () => editCommand('undo') },
-        { label: 'Redo', accel: 'Ctrl+Y', enabled: hasDoc && !!(ed && ed.commands && ed.commands.canRedo && ed.commands.canRedo()), action: () => editCommand('redo') },
+        { label: 'Undo', accel: 'Ctrl+Z', icon: ICONS.undo, enabled: hasDoc && !!(ed && ed.commands && ed.commands.canUndo && ed.commands.canUndo()), action: () => editCommand('undo') },
+        { label: 'Redo', accel: 'Ctrl+Y', icon: ICONS.redo, enabled: hasDoc && !!(ed && ed.commands && ed.commands.canRedo && ed.commands.canRedo()), action: () => editCommand('redo') },
         { sep: true },
-        { label: 'Cut', accel: 'Ctrl+X', enabled: hasDoc, action: () => editCommand('cut') },
-        { label: 'Copy', accel: 'Ctrl+C', enabled: hasDoc, action: () => editCommand('copy') },
-        { label: 'Paste', accel: 'Ctrl+V', enabled: hasDoc, action: () => editCommand('paste') },
+        { label: 'Cut', accel: 'Ctrl+X', icon: ICONS.cut, enabled: hasDoc, action: () => editCommand('cut') },
+        { label: 'Copy', accel: 'Ctrl+C', icon: ICONS.copy, enabled: hasDoc, action: () => editCommand('copy') },
+        { label: 'Paste', accel: 'Ctrl+V', icon: ICONS.paste, enabled: hasDoc, action: () => editCommand('paste') },
         { sep: true },
         { label: 'Select All', accel: 'Ctrl+A', enabled: hasDoc && kind !== 'sheet' && kind !== 'pdf', action: () => editCommand('selectAll') },
         { sep: true },
-        { label: 'Find & Replace…', accel: 'Ctrl+F', enabled: hasDoc, action: () => editCommand('find') }
+        { label: 'Find & Replace…', accel: 'Ctrl+F', icon: ICONS.search, enabled: hasDoc, action: () => editCommand('find') }
       ] },
       { label: 'View', items: [
-        { label: 'Appearance', submenu: () =>
+        { label: 'Command Palette…', accel: 'Ctrl+K', icon: ICONS.command, paletteSkip: true, action: () => openPalette() },
+        { label: 'Home', icon: ICONS.home, enabled: state.view !== 'home', action: showLanding },
+        { sep: true },
+        { label: 'Theme', icon: ICONS.palette, submenu: () =>
           window.MargoThemes.list.map((t) => ({
             label: t.label,
             checked: state.theme === t.id,
             action: () => applyTheme(t.id, true)
           }))
         },
-        { sep: true },
-        { label: 'Pin sidebar', checked: sidebarPinned, action: toggleSidebarPin },
-        { sep: true },
-        { label: 'Headings Outline', enabled: hasDoc && (kind === 'doc' || kind === 'md'), action: () => ed && ed.commands && ed.commands.outline && ed.commands.outline() },
-        { label: 'Document Statistics', enabled: hasDoc && (kind === 'doc' || kind === 'md'), action: () => ed && ed.commands && ed.commands.stats && ed.commands.stats() },
-        { label: 'Images in Document', enabled: hasDoc && (kind === 'doc' || kind === 'pdf'), action: () => {
-          if (kind === 'doc' && ed && ed.commands && ed.commands.extractImages) ed.commands.extractImages();
-          else if (kind === 'pdf' && ed && ed.commands && ed.commands.showImages) ed.commands.showImages();
-        } },
-        { label: 'Focus Mode (Distraction-Free)', accel: 'Esc to exit', enabled: hasDoc && kind === 'doc', action: () => ed && ed.commands && ed.commands.focusMode && ed.commands.focusMode() },
-        { label: 'Insert Function (fx)…', enabled: hasDoc && kind === 'sheet', action: () => ed && ed.commands && ed.commands.insertFx && ed.commands.insertFx() },
-        { label: 'Insert Chart', enabled: hasDoc && kind === 'sheet', submenu: [
-          { label: 'Column chart', action: () => ed && ed.commands && ed.commands.insertChart && ed.commands.insertChart('column') },
-          { label: 'Bar chart', action: () => ed && ed.commands && ed.commands.insertChart && ed.commands.insertChart('bar') },
-          { label: 'Line chart', action: () => ed && ed.commands && ed.commands.insertChart && ed.commands.insertChart('line') },
-          { label: 'Pie chart', action: () => ed && ed.commands && ed.commands.insertChart && ed.commands.insertChart('pie') }
+        { label: 'Density', icon: ICONS.density, submenu: () => [
+          { label: 'Comfortable', checked: settings.density === 'comfortable', action: () => updateSettings({ density: 'comfortable' }) },
+          { label: 'Compact', checked: settings.density === 'compact', action: () => updateSettings({ density: 'compact' }) }
         ] },
-        { label: 'Toggle AutoFilter', enabled: hasDoc && kind === 'sheet', action: () => ed && ed.commands && ed.commands.toggleFilter && ed.commands.toggleFilter() },
-        { label: 'Sort Ascending (A-Z)', enabled: hasDoc && kind === 'sheet', action: () => ed && ed.commands && ed.commands.sortAsc && ed.commands.sortAsc() },
-        { label: 'Sort Descending (Z-A)', enabled: hasDoc && kind === 'sheet', action: () => ed && ed.commands && ed.commands.sortDesc && ed.commands.sortDesc() },
+        { label: 'Keep Library Open', accel: 'Ctrl+\\', icon: ICONS.sidebar, checked: sidebarPinned, action: toggleSidebarPin },
+        { label: 'Search Library…', icon: ICONS.search, action: focusLibrarySearch },
         { sep: true },
-        { label: 'Markdown layout', enabled: kind === 'md', submenu: () =>
-          ['write', 'split', 'read'].map((m) => ({
-            label: m[0].toUpperCase() + m.slice(1),
-            checked: !!(ed && ed.commands && ed.commands.getMdMode && ed.commands.getMdMode() === m),
-            action: () => ed.commands.setMdMode(m)
-          }))
-        },
-        { label: 'Document layout', enabled: kind === 'doc', submenu: () =>
-          ['print', 'read', 'split'].map((m) => ({
-            label: m === 'print' ? 'Print Layout' : m === 'read' ? 'Read View' : 'Split View',
-            checked: !!(ed && ed.commands && ed.commands.getViewMode && ed.commands.getViewMode() === m),
-            action: () => ed.commands.setViewMode(m)
-          }))
-        },
-        { label: 'Zoom', enabled: !!(ed && ed.commands && ed.commands.zoomIn), submenu: () => {
-          const items = [
-            { label: 'Zoom in', action: () => ed.commands.zoomIn() },
-            { label: 'Zoom out', action: () => ed.commands.zoomOut() },
-            { sep: true },
-            { label: kind === 'pdf' ? 'Fit width' : 'Reset zoom', action: () => ed.commands.zoomReset() }
-          ];
-          return items;
-        } }
+        /* What follows belongs to one kind of document each: it is only
+           listed while that kind is in front, instead of a wall of greyed
+           rows for editors that are not open. */
+        ...onlyFor(kind, ['slides'], [
+          { label: 'Slide Show from Beginning', accel: 'F5', icon: ICONS.present, action: () => EC(ed, 'present', 0) },
+          { label: 'Slide Show from Current Slide', accel: 'Shift+F5', action: () => EC(ed, 'presentCurrent') },
+          { label: 'Speaker Notes', action: () => EC(ed, 'toggleNotes') }
+        ]),
+        ...onlyFor(kind, ['doc', 'md'], [
+          { label: 'Headings Outline', icon: ICONS.outline, action: () => EC(ed, 'outline') },
+          { label: 'Document Statistics', icon: ICONS.stats, action: () => EC(ed, 'stats') }
+        ]),
+        ...onlyFor(kind, ['doc', 'pdf'], [
+          { label: 'Images in Document', icon: ICONS.image, action: () => {
+            if (kind === 'doc') EC(ed, 'extractImages');
+            else if (kind === 'pdf') EC(ed, 'showImages');
+          } }
+        ]),
+        ...onlyFor(kind, ['doc'], [
+          { label: 'Focus Mode (Distraction-Free)', accel: 'Esc to exit', icon: ICONS.focus, action: () => EC(ed, 'focusMode') },
+          { label: 'Document layout', submenu: () =>
+            ['print', 'read', 'split'].map((m) => ({
+              label: m === 'print' ? 'Print Layout' : m === 'read' ? 'Read View' : 'Split View',
+              checked: !!(ed && ed.commands && ed.commands.getViewMode && ed.commands.getViewMode() === m),
+              action: () => ed.commands.setViewMode(m)
+            }))
+          }
+        ]),
+        ...onlyFor(kind, ['md'], [
+          { label: 'Markdown layout', submenu: () =>
+            ['write', 'split', 'read'].map((m) => ({
+              label: m[0].toUpperCase() + m.slice(1),
+              checked: !!(ed && ed.commands && ed.commands.getMdMode && ed.commands.getMdMode() === m),
+              action: () => ed.commands.setMdMode(m)
+            }))
+          }
+        ]),
+        ...onlyFor(kind, ['sheet'], [
+          { label: 'Insert Function (fx)…', icon: ICONS.fx, action: () => EC(ed, 'insertFx') },
+          { label: 'Insert Chart', icon: ICONS.chartCol, submenu: [
+            { label: 'Column chart', icon: ICONS.chartCol, action: () => EC(ed, 'insertChart', 'column') },
+            { label: 'Bar chart', icon: ICONS.chartBar, action: () => EC(ed, 'insertChart', 'bar') },
+            { label: 'Line chart', icon: ICONS.chartLine, action: () => EC(ed, 'insertChart', 'line') },
+            { label: 'Pie chart', icon: ICONS.chartPie, action: () => EC(ed, 'insertChart', 'pie') }
+          ] },
+          { label: 'Toggle AutoFilter', icon: ICONS.filter, action: () => EC(ed, 'toggleFilter') },
+          { label: 'Sort Ascending (A-Z)', icon: ICONS.sortAZ, action: () => EC(ed, 'sortAsc') },
+          { label: 'Sort Descending (Z-A)', icon: ICONS.sortZA, action: () => EC(ed, 'sortDesc') }
+        ]),
+        { sep: true },
+        { label: 'Zoom', icon: ICONS.zoomIn, enabled: !!(ed && ed.commands && ed.commands.zoomIn), submenu: () => [
+          { label: 'Zoom in', accel: 'Ctrl++', icon: ICONS.zoomIn, action: () => ed.commands.zoomIn() },
+          { label: 'Zoom out', accel: 'Ctrl+-', icon: ICONS.zoomOut, action: () => ed.commands.zoomOut() },
+          { sep: true },
+          { label: kind === 'pdf' ? 'Fit width' : 'Reset zoom', accel: 'Ctrl+0', icon: ICONS.fit, action: () => ed.commands.zoomReset() }
+        ] }
       ] },
       { label: 'Help', items: [
-        { label: 'Keyboard shortcuts', action: showShortcuts },
-        { label: 'Settings', action: () => showSettings(false) },
-        { label: 'Check for updates…', action: checkForUpdates },
+        { label: 'Keyboard Shortcuts', accel: 'Ctrl+/', icon: ICONS.keyboard, action: showShortcuts },
+        { label: 'Settings', accel: 'Ctrl+,', icon: ICONS.settings, action: () => showSettings(false) },
+        { label: 'Check for Updates…', icon: ICONS.refresh, action: checkForUpdates },
         { sep: true },
-        { label: 'About Margo', action: showAbout }
+        { label: 'About Margo', icon: ICONS.info, action: showAbout }
       ] }
     ];
   }
 
-  /* ---------------- sidebar wiring ---------------- */
-  function wireNewButtons(selector) {
-    document.querySelectorAll(selector).forEach((b) => {
-      b.addEventListener('click', () => newDocGuarded(b.dataset.new));
-      const icon = b.querySelector('.side-new-icon, .home-new-icon');
-      const kind = b.dataset.new;
-      if (!icon) return;
-      icon.innerHTML = kind === 'md' ? window.MargoIcons.fileMd
-        : kind === 'doc' ? window.MargoIcons.fileDoc
-        : kind === 'sheet' ? window.MargoIcons.fileSheet
-        : window.MargoIcons.filePdf;
+  let menubarApi = null;
+  function closeMenus() {
+    if (menubarApi) menubarApi.close();
+    if (window.MargoMenubar.closeContextMenu) window.MargoMenubar.closeContextMenu();
+  }
+
+  /* ---------------- command palette ---------------- */
+  let paletteEntries = [];
+  let paletteShown = [];
+  let paletteActive = 0;
+  let paletteSaved = null;   // focus + selection to put back on close
+  function paletteIsOpen() {
+    return !els.paletteBackdrop.classList.contains('hidden');
+  }
+  function resolveMenuItems(items) {
+    return (typeof items === 'function' ? items() : items) || [];
+  }
+  function collectCommands() {
+    const out = [];
+    const walk = (items, trail) => {
+      resolveMenuItems(items).forEach((it) => {
+        if (!it || it.sep || it.heading || it.paletteSkip) return;
+        if (it.enabled === false) return;
+        if (it.submenu) {
+          walk(it.submenu, trail.concat(it.label));
+          return;
+        }
+        if (typeof it.action !== 'function') return;
+        const label = trail.length > 1 ? `${trail[trail.length - 1]}: ${it.label}` : it.label;
+        out.push({
+          type: 'command',
+          label,
+          detail: trail.join(' › '),
+          accel: it.accel && !/to exit/.test(it.accel) ? it.accel : '',
+          icon: it.icon || (it.checked ? ICONS.check : ICONS.command),
+          run: it.action
+        });
+      });
+    };
+    menuSpec().forEach((m) => walk(m.items, [m.label]));
+    return out;
+  }
+  function collectPaletteEntries() {
+    const entries = [];
+    state.tabs.forEach((t) => {
+      if (t.id === state.activeTabId && state.view === 'editor') return;
+      entries.push({
+        type: 'tab',
+        label: (t.doc && t.doc.name) || 'Untitled',
+        detail: t.dirty ? 'Open tab · unsaved' : 'Open tab',
+        icon: ICONS[KIND_ICON[t.doc && t.doc.kind]] || ICONS.file,
+        run: () => activateTab(t.id)
+      });
+    });
+    const seen = new Set(state.tabs.map((t) => pathKey(t.doc && t.doc.path)));
+    const files = pinnedEntries().concat(lastRecents.filter((r) => !isPinned(r.path)));
+    files.forEach((r) => {
+      if (seen.has(pathKey(r.path))) return;
+      seen.add(pathKey(r.path));
+      const dir = String(r.path).replace(/[\\/][^\\/]*$/, '');
+      entries.push({
+        type: 'file',
+        label: r.name,
+        detail: (isPinned(r.path) ? 'Pinned · ' : '') + dir,
+        icon: ICONS[KIND_ICON[recentKind(r)]] || ICONS.file,
+        run: () => openFromPath(r.path)
+      });
+    });
+    return entries.concat(collectCommands());
+  }
+  /* Subsequence match with bonuses for runs and word starts; returns the
+     matched character positions for highlighting. */
+  function fuzzyMatch(query, text) {
+    const q = query.toLowerCase().replace(/\s+/g, '');
+    if (!q) return { score: 0, idx: [] };
+    const t = text.toLowerCase();
+    let ti = 0;
+    let prev = -2;
+    let score = 0;
+    const idx = [];
+    for (const ch of q) {
+      const found = t.indexOf(ch, ti);
+      if (found < 0) return null;
+      let s = 1;
+      if (found === prev + 1) s += 4;
+      if (found === 0 || /[\s\-_.:/\\›(]/.test(t[found - 1])) s += 6;
+      s -= Math.min(found - ti, 12) * 0.15;
+      score += s;
+      idx.push(found);
+      prev = found;
+      ti = found + 1;
+    }
+    const plain = query.toLowerCase().trim();
+    if (t.startsWith(plain)) score += 12;
+    else if (t.includes(plain)) score += 6;
+    score -= t.length * 0.01;
+    return { score, idx };
+  }
+  function rankPalette(query) {
+    const q = query.trim();
+    if (!q) return paletteEntries.slice();
+    const scored = [];
+    paletteEntries.forEach((e) => {
+      const m = fuzzyMatch(q, e.label);
+      if (m) {
+        scored.push({ e, score: m.score + (e.type === 'tab' ? 3 : e.type === 'file' ? 1 : 0), idx: m.idx });
+        return;
+      }
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = (e.detail + ' ' + e.label).toLowerCase();
+      if (words.length && words.every((w) => hay.includes(w))) scored.push({ e, score: -5, idx: [] });
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 60).map((s) => ({ ...s.e, idx: s.idx }));
+  }
+  function highlightLabel(label, idx) {
+    if (!idx || !idx.length) return escapeHtml(label);
+    const set = new Set(idx);
+    let html = '';
+    for (let i = 0; i < label.length; i++) {
+      const ch = escapeHtml(label[i]);
+      html += set.has(i) ? `<mark>${ch}</mark>` : ch;
+    }
+    return html;
+  }
+  function renderPalette() {
+    const q = els.paletteInput.value;
+    paletteShown = rankPalette(q);
+    if (paletteActive >= paletteShown.length) paletteActive = Math.max(0, paletteShown.length - 1);
+    const list = els.paletteList;
+    list.innerHTML = '';
+    if (!paletteShown.length) {
+      const empty = document.createElement('div');
+      empty.className = 'palette-empty';
+      empty.textContent = `Nothing matches “${q.trim()}”.`;
+      list.appendChild(empty);
+      els.paletteInput.removeAttribute('aria-activedescendant');
+      return;
+    }
+    const grouped = !q.trim();
+    const GROUP_TITLES = { tab: 'Open tabs', file: 'Recent files', command: 'Commands' };
+    let lastGroup = null;
+    paletteShown.forEach((e, i) => {
+      if (grouped && e.type !== lastGroup) {
+        lastGroup = e.type;
+        const g = document.createElement('div');
+        g.className = 'palette-group';
+        g.textContent = GROUP_TITLES[e.type] || '';
+        list.appendChild(g);
+      }
+      const row = document.createElement('div');
+      row.className = 'palette-item' + (i === paletteActive ? ' active' : '');
+      row.id = 'palette-opt-' + i;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', i === paletteActive ? 'true' : 'false');
+      row.dataset.index = String(i);
+      const ic = document.createElement('span');
+      ic.className = 'palette-item-icon';
+      ic.innerHTML = e.icon || '';
+      const label = document.createElement('span');
+      label.className = 'palette-item-label';
+      label.innerHTML = highlightLabel(e.label, e.idx);
+      const detail = document.createElement('span');
+      detail.className = 'palette-item-detail';
+      detail.textContent = e.detail || '';
+      row.appendChild(ic);
+      row.appendChild(label);
+      row.appendChild(detail);
+      if (e.accel) {
+        const acc = document.createElement('span');
+        acc.className = 'palette-item-accel';
+        acc.innerHTML = e.accel.split('+').filter(Boolean).map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('');
+        row.appendChild(acc);
+      }
+      row.addEventListener('mousemove', () => {
+        if (paletteActive === i) return;
+        paletteActive = i;
+        paintPaletteActive(false);
+      });
+      row.addEventListener('mousedown', (ev) => ev.preventDefault());
+      row.addEventListener('click', () => runPaletteEntry(i));
+      list.appendChild(row);
+    });
+    paintPaletteActive(true);
+  }
+  function paintPaletteActive(scroll) {
+    els.paletteList.querySelectorAll('.palette-item').forEach((row) => {
+      const on = Number(row.dataset.index) === paletteActive;
+      row.classList.toggle('active', on);
+      row.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on && scroll) row.scrollIntoView({ block: 'nearest' });
+    });
+    els.paletteInput.setAttribute('aria-activedescendant', 'palette-opt-' + paletteActive);
+  }
+  function openPalette(initial) {
+    if (isModalOpen()) return;
+    if (paletteIsOpen()) {
+      els.paletteInput.select();
+      return;
+    }
+    closeAccountMenu();
+    closeMenus();
+    const sel = window.getSelection();
+    paletteSaved = {
+      el: document.activeElement,
+      ranges: sel && sel.rangeCount ? [...Array(sel.rangeCount)].map((_, i) => sel.getRangeAt(i).cloneRange()) : []
+    };
+    paletteEntries = collectPaletteEntries();
+    paletteActive = 0;
+    els.paletteInput.value = initial || '';
+    els.paletteBackdrop.classList.remove('hidden');
+    renderPalette();
+    els.paletteInput.focus();
+  }
+  function closePalette(restore) {
+    if (!paletteIsOpen()) return;
+    els.paletteBackdrop.classList.add('hidden');
+    els.paletteList.innerHTML = '';
+    const saved = paletteSaved;
+    paletteSaved = null;
+    if (restore === false || !saved) return;
+    /* Put focus - and the selection an editor command will act on - back
+       where they were, as if a menu had been used instead. */
+    const el = saved.el;
+    if (el && el.isConnected && typeof el.focus === 'function' && el !== document.body) {
+      try { el.focus({ preventScroll: true }); } catch {}
+      if (saved.ranges.length && (el.isContentEditable || (el.contains && saved.ranges.every((r) => el.contains(r.startContainer))))) {
+        try {
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          saved.ranges.forEach((r) => sel.addRange(r));
+        } catch {}
+      }
+    }
+  }
+  function runPaletteEntry(i) {
+    const e = paletteShown[i];
+    if (!e) return;
+    closePalette();
+    try {
+      const r = e.run();
+      if (r && typeof r.catch === 'function') r.catch((err) => toast((err && err.message) || 'Command failed', 'error'));
+    } catch (err) {
+      toast((err && err.message) || 'Command failed', 'error');
+    }
+  }
+  els.paletteInput.addEventListener('input', () => {
+    paletteActive = 0;
+    renderPalette();
+  });
+  els.paletteInput.addEventListener('keydown', (e) => {
+    const n = paletteShown.length;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (n) { paletteActive = (paletteActive + 1) % n; paintPaletteActive(true); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (n) { paletteActive = (paletteActive - 1 + n) % n; paintPaletteActive(true); }
+    } else if (e.key === 'PageDown' || e.key === 'PageUp') {
+      e.preventDefault();
+      if (n) {
+        paletteActive = Math.max(0, Math.min(n - 1, paletteActive + (e.key === 'PageDown' ? 8 : -8)));
+        paintPaletteActive(true);
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      runPaletteEntry(paletteActive);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePalette();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+    }
+  });
+  els.paletteBackdrop.addEventListener('mousedown', (e) => {
+    if (e.target === els.paletteBackdrop) closePalette();
+  });
+
+  /* ---------------- session (reopen tabs on launch) ---------------- */
+  const SESSION_KEY = 'margo.session';
+  let sessionRestoring = false;
+  /* Nothing is written until boot has read the last session: the first
+     tab-related repaint during startup used to overwrite it with an empty
+     one before it could be restored. */
+  let sessionLoaded = false;
+  function persistSession() {
+    if (sessionRestoring || !sessionLoaded) return;
+    try {
+      const paths = state.tabs.filter((t) => t.doc && t.doc.path).map((t) => t.doc.path);
+      const front = findTab(state.activeTabId) || findTab(state.lastActiveTabId);
+      localStorage.setItem(SESSION_KEY, JSON.stringify({
+        paths,
+        active: front && front.doc ? front.doc.path || null : null,
+        home: state.view === 'home'
+      }));
+    } catch {}
+  }
+  async function restoreSession() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch {}
+    if (!saved || !Array.isArray(saved.paths) || !saved.paths.length) return false;
+    sessionRestoring = true;
+    let opened = 0;
+    try {
+      for (const p of saved.paths.slice(0, MAX_TABS)) {
+        const res = await window.margo.openPath(p);
+        if (!res || !res.ok) continue;
+        try {
+          if (await openInTab(res.doc)) opened += 1;
+        } catch {}
+      }
+    } finally {
+      sessionRestoring = false;
+    }
+    if (!opened) return false;
+    sessionLoaded = true;
+    const front = saved.active ? findTabByPath(saved.active) : null;
+    if (front) await activateTab(front.id);
+    if (saved.home) showLanding();
+    persistSession();
+    return true;
+  }
+
+  /* ---------------- files changed outside Margo ---------------- */
+  const externalPrompts = new Map();
+  function handleExternalChange(ev) {
+    const p = ev && ev.path;
+    const t = p ? findTabByPath(p) : null;
+    if (!t) return;
+    syncActiveTab();
+    const key = pathKey(p);
+    const prev = externalPrompts.get(key);
+    if (prev) prev.dismiss();
+    const name = (t.doc && t.doc.name) || baseName(p);
+    let handle;
+    if (ev.kind === 'deleted') {
+      /* The open copy is now the only one: it counts as unsaved, so closing
+         it asks first and autosave cannot quietly recreate the file. */
+      t.orphaned = true;
+      markTabDirty(t);
+      handle = toast(`${name} was deleted or moved outside Margo. Your copy is still open.`, 'info', {
+        duration: 15000,
+        actions: [{ label: 'Save as…', primary: true, onClick: async () => { await activateTab(t.id); await saveDoc(true); } }]
+      });
+    } else {
+      t.orphaned = false;
+      handle = toast(t.dirty
+        ? `${name} changed on disk while you have unsaved changes.`
+        : `${name} was changed by another program.`, 'info', {
+        duration: 0,
+        actions: [
+          { label: 'Keep mine', onClick: () => { if (state.tabs.includes(t)) markTabDirty(t); } },
+          { label: 'Reload', primary: true, onClick: () => { if (state.tabs.includes(t)) reloadTabFromDisk(t, false); } }
+        ]
+      });
+    }
+    externalPrompts.set(key, handle);
+  }
+  if (typeof window.margo.onFileChangedExternally === 'function') {
+    window.margo.onFileChangedExternally(handleExternalChange);
+  }
+
+  /* ---------------- home & library wiring ---------------- */
+  function paintGreeting() {
+    const h = new Date().getHours();
+    const part = h < 5 ? 'Good evening' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    if (els.homeGreeting) els.homeGreeting.textContent = part;
+    if (els.homeDate) els.homeDate.textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  }
+  function buildNewButtons() {
+    if (els.homeNewRow) {
+      els.homeNewRow.innerHTML = '';
+      availableKinds().forEach((k) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'home-new';
+        b.dataset.new = k.kind;
+        b.title = `New ${k.long.toLowerCase()}` + (k.kind === settings.defaultKind ? ' (Ctrl+N)' : '');
+        b.innerHTML =
+          `<span class="home-new-icon icon-${k.kind}">${ICONS[KIND_ICON[k.kind]]}</span>` +
+          `<span class="home-new-text"><span class="home-new-label">${escapeHtml(k.label)}</span>` +
+          `<span class="home-new-meta">${escapeHtml(k.meta)}</span></span>`;
+        b.addEventListener('click', () => newDocGuarded(k.kind));
+        els.homeNewRow.appendChild(b);
+      });
+    }
+    if (els.sideNewRow) {
+      els.sideNewRow.innerHTML = '';
+      availableKinds().forEach((k) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'side-new';
+        b.dataset.new = k.kind;
+        b.title = `New ${k.long.toLowerCase()}`;
+        b.innerHTML = `<span class="side-new-icon icon-${k.kind}">${ICONS[KIND_ICON[k.kind]]}</span><span class="side-new-label"></span>`;
+        b.querySelector('.side-new-label').textContent = { doc: 'Doc', sheet: 'Sheet', slides: 'Slides', md: 'Note', pdf: 'PDF' }[k.kind] || k.label;
+        b.addEventListener('click', () => newDocGuarded(k.kind));
+        els.sideNewRow.appendChild(b);
+      });
+    }
+  }
+  function buildTemplates() {
+    if (!els.homeTemplates) return;
+    els.homeTemplates.innerHTML = '';
+    TEMPLATES.filter((t) => kindAvailable(t.kind)).forEach((t) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'home-template';
+      b.dataset.template = t.id;
+      b.title = `New ${t.label.toLowerCase()} (${t.meta})`;
+      const cover = document.createElement('span');
+      cover.className = 'tpl-cover';
+      cover.style.setProperty('--tpl-tint', `var(--kind-${t.kind})`);
+      cover.innerHTML = t.preview() + `<span class="tpl-kind icon-${t.kind}">${ICONS[t.icon]}</span>`;
+      const info = document.createElement('span');
+      info.className = 'tpl-info';
+      info.innerHTML = `<span class="tpl-name">${escapeHtml(t.label)}</span><span class="tpl-meta">${escapeHtml(t.meta)}</span>`;
+      b.appendChild(cover);
+      b.appendChild(info);
+      b.addEventListener('click', () => newFromTemplate(t.id));
+      els.homeTemplates.appendChild(b);
     });
   }
-  wireNewButtons('.side-new');
-  wireNewButtons('.home-new');
+  buildNewButtons();
+  buildTemplates();
+  paintGreeting();
+  if (kindAvailable('slides')) {
+    const dropHint = els.dropOverlay && els.dropOverlay.querySelector('.drop-overlay-card > span:last-child');
+    if (dropHint) dropHint.textContent = 'Word, Excel, PowerPoint, Markdown, CSV and PDF files';
+  }
+  document.querySelectorAll('[data-icon]').forEach((el) => {
+    const icon = ICONS[el.dataset.icon];
+    if (icon && !el.innerHTML.trim()) el.innerHTML = icon;
+  });
+  const cmdIcon = $('cmd-trigger-icon');
+  if (cmdIcon) cmdIcon.innerHTML = ICONS.search;
+  if (els.btnCommand) els.btnCommand.addEventListener('click', () => openPalette());
+  if (els.btnHomePalette) els.btnHomePalette.addEventListener('click', () => openPalette());
+  if (els.tabNew) {
+    els.tabNew.innerHTML = ICONS.plus;
+    els.tabNew.addEventListener('click', () => newDocGuarded(settings.defaultKind));
+  }
   $('btn-open-file').addEventListener('click', pickAndOpen);
   if (els.btnHomeOpen) els.btnHomeOpen.addEventListener('click', pickAndOpen);
-  const clearRecents = async () => { await window.margo.recents.clear(); loadRecents(); };
+  const clearRecents = async () => {
+    const ok = await confirmModal('Clear recent files?', 'This removes every file from the recent list. The files themselves are not touched.', { confirmLabel: 'Clear' });
+    if (!ok) return;
+    await window.margo.recents.clear();
+    loadRecents();
+  };
   els.btnClearRecents.addEventListener('click', clearRecents);
   if (els.btnClearHomeRecents) els.btnClearHomeRecents.addEventListener('click', clearRecents);
   if (els.btnSidebarSettings) {
     const settingsIcon = $('side-settings-icon');
-    if (settingsIcon) settingsIcon.innerHTML = window.MargoIcons.settings;
+    if (settingsIcon) settingsIcon.innerHTML = ICONS.settings;
     els.btnSidebarSettings.addEventListener('click', () => showSettings(false));
   }
+  if (els.btnSideShortcuts) {
+    els.btnSideShortcuts.innerHTML = ICONS.keyboard;
+    els.btnSideShortcuts.addEventListener('click', showShortcuts);
+  }
+  if (els.btnSideTheme) els.btnSideTheme.addEventListener('click', toggleScheme);
+  if (els.sideGroupBtn) {
+    els.sideGroupBtn.innerHTML = ICONS.grid;
+    els.sideGroupBtn.addEventListener('click', () => updateSettings({ sideGroup: !settings.sideGroup }) && renderSidebarRecents(lastRecents));
+  }
+  if (els.sideSearch) {
+    els.sideSearch.addEventListener('input', () => renderSidebarRecents(lastRecents));
+    els.sideSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && els.sideSearch.value) {
+        e.stopPropagation();
+        els.sideSearch.value = '';
+        renderSidebarRecents(lastRecents);
+      } else if (e.key === 'Enter') {
+        const first = els.sidebar.querySelector('.recent-card');
+        if (first) first.click();
+      }
+    });
+  }
+  if (els.homeSearch) {
+    els.homeSearch.addEventListener('input', () => renderHomeTiles(lastRecents));
+    els.homeSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && els.homeSearch.value) {
+        e.stopPropagation();
+        els.homeSearch.value = '';
+        renderHomeTiles(lastRecents);
+      } else if (e.key === 'Enter') {
+        const first = els.home.querySelector('.home-tile');
+        if (first) first.click();
+      }
+    });
+  }
   els.btnHome.addEventListener('click', () => { if (state.view === 'home') return; showLanding(); });
+  /* The greeting and the "2 min ago" labels go stale on a window left open. */
+  setInterval(() => {
+    if (state.view !== 'home' || document.visibilityState !== 'visible') return;
+    paintGreeting();
+  }, 60000);
 
   /* ---------------- drag & drop ---------------- */
+  function openableExt(ext) {
+    return OPENABLE_EXTS.includes(ext) || (ext === 'pptx' && kindAvailable('slides'));
+  }
+  let fileDragDepth = 0;
+  function dragHasFiles(e) {
+    const types = e.dataTransfer && e.dataTransfer.types;
+    return !!types && [...types].includes('Files');
+  }
+  /* Pictures dragged in are for an editor (a page, a slide), not for opening. */
+  function dragIsOnlyImages(e) {
+    const items = e.dataTransfer && e.dataTransfer.items ? [...e.dataTransfer.items] : [];
+    return items.length > 0 && items.every((it) => it.kind === 'file' && /^image\//.test(it.type || ''));
+  }
+  function hideDropOverlay() {
+    fileDragDepth = 0;
+    els.dropOverlay.classList.add('hidden');
+  }
+  document.addEventListener('dragenter', (e) => {
+    if (!dragHasFiles(e) || dragIsOnlyImages(e)) return;
+    fileDragDepth += 1;
+    els.dropOverlay.classList.remove('hidden');
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (!dragHasFiles(e)) return;
+    fileDragDepth = Math.max(0, fileDragDepth - 1);
+    if (!fileDragDepth) els.dropOverlay.classList.add('hidden');
+  });
   document.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('blur', hideDropOverlay);
   document.addEventListener('drop', async (e) => {
+    const handledByEditor = e.defaultPrevented;
     e.preventDefault();
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!file) return;
-    const p = window.margo.pathForFile(file);
-    if (p) await openFromPath(p);
+    hideDropOverlay();
+    if (handledByEditor || !dragHasFiles(e)) return;
+    const files = e.dataTransfer.files ? [...e.dataTransfer.files] : [];
+    const skipped = [];
+    for (const file of files) {
+      const p = window.margo.pathForFile(file);
+      if (!p) continue;
+      if (!openableExt(extOf(p))) {
+        skipped.push(file.name);
+        continue;
+      }
+      if (state.tabs.length >= MAX_TABS && !findTabByPath(p)) {
+        toast(`Close a tab first — Margo keeps up to ${MAX_TABS} documents open.`);
+        break;
+      }
+      await openFromPath(p);
+    }
+    if (skipped.length) {
+      toast(`Margo can’t open ${skipped.length === 1 ? skipped[0] : skipped.length + ' of those files'}.`, 'error');
+    }
   });
 
   function isDocumentUndoTarget(el) {
     if (!el || !el.closest) return true;
     if (el.closest('#modal-backdrop')) return false;
+    if (el.closest('#palette-backdrop')) return false;
     if (el.closest('.doc-find-bar')) return false;
     if (el.closest('#account-menu')) return false;
+    if (el.closest('.side-search') || el.closest('.home-library-tools')) return false;
     if (el.closest('.sig-pad') || el.closest('.sig-float') || el.closest('.sig-pad-hint')) return false;
     return true;
   }
@@ -3381,66 +4301,109 @@
   /* ---------------- shortcuts ---------------- */
   document.addEventListener('keydown', (e) => {
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
-      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
-        e.preventDefault();
-        editCommand('undo');
-      }
+    const key = (e.key || '').toLowerCase();
+    /* A dialog or the palette owns the keyboard while it is up: Ctrl+W used
+       to close the tab behind "Save changes?", and Ctrl+S to start a second
+       save underneath it. */
+    if (isModalOpen() || paletteIsOpen()) return;
+    if (!mod) {
+      if (e.key === 'Escape') closeAccountMenu();
+      return;
     }
-    else if (mod && e.key.toLowerCase() === 'y') {
-      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
-        e.preventDefault();
-        editCommand('redo');
-      }
-    }
-    else if (mod && e.shiftKey && e.key.toLowerCase() === 'z') {
-      if (state.view === 'editor' && state.doc && isDocumentUndoTarget(e.target)) {
-        e.preventDefault();
-        editCommand('redo');
-      }
-    }
-    else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'editor') saveDoc(false); }
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'editor') saveDoc(true); }
-    else if (e.ctrlKey && e.key.toLowerCase() === 'o') { e.preventDefault(); pickAndOpen(); }
-    else if (e.ctrlKey && e.key.toLowerCase() === 'e') { e.preventDefault(); if (state.view === 'editor') exportPdf(); }
-    else if (e.ctrlKey && e.key.toLowerCase() === 'p') { e.preventDefault(); if (state.view === 'editor') printDoc(); }
-    else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
-      if (state.view === 'editor' && state.doc) {
+    const inEditor = state.view === 'editor' && !!state.doc;
+    const isEditorKey = inEditor && isDocumentUndoTarget(e.target);
+
+    if (!e.shiftKey && !e.altKey && key === 'z') {
+      if (isEditorKey) { e.preventDefault(); editCommand('undo'); }
+    } else if (!e.altKey && key === 'y') {
+      if (isEditorKey) { e.preventDefault(); editCommand('redo'); }
+    } else if (e.shiftKey && !e.altKey && key === 'z') {
+      if (isEditorKey) { e.preventDefault(); editCommand('redo'); }
+    } else if (e.ctrlKey && e.altKey && !e.shiftKey && key === 's') {
+      e.preventDefault();
+      saveAllTabs();
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 's') {
+      e.preventDefault();
+      if (state.view === 'editor') saveDoc(false);
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's') {
+      e.preventDefault();
+      if (state.view === 'editor') saveDoc(true);
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'o') {
+      e.preventDefault();
+      pickAndOpen();
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'n') {
+      e.preventDefault();
+      newDocGuarded(settings.defaultKind);
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'e') {
+      e.preventDefault();
+      if (state.view === 'editor') exportPdf();
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'p') {
+      e.preventDefault();
+      if (state.view === 'editor') printDoc();
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'f') {
+      if (inEditor) {
         e.preventDefault();
         editCommand('find');
       }
-    }
-    else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'w') {
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'w') {
       e.preventDefault();
       if (state.view === 'editor') closeActiveTab();
-    }
-    else if (e.ctrlKey && e.key === 'Tab') {
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === 't') {
+      e.preventDefault();
+      reopenClosedTab();
+    } else if (e.ctrlKey && e.key === 'Tab') {
       e.preventDefault();
       cycleTabs(e.shiftKey ? -1 : 1);
-    }
-    else if (mod && !e.shiftKey && (e.key === '=' || e.key === '+' || e.code === 'NumpadAdd')) {
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'PageDown' || e.key === 'PageUp')) {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      cycleTabs(e.key === 'PageDown' ? 1 : -1);
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      if (e.defaultPrevented || !state.tabs.length) return;
+      e.preventDefault();
+      activateTabAt(Number(e.key));
+    } else if (!e.shiftKey && !e.altKey && key === 'k') {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      openPalette();
+    } else if (e.shiftKey && !e.altKey && key === 'p') {
+      e.preventDefault();
+      openPalette();
+    } else if (!e.altKey && (e.key === '/' || e.code === 'Slash')) {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      showShortcuts();
+    } else if (!e.shiftKey && !e.altKey && e.key === ',') {
+      e.preventDefault();
+      showSettings(false);
+    } else if (!e.shiftKey && !e.altKey && e.key === '\\') {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      toggleSidebarPin();
+      if (sidebarPinned) openSidebar();
+    } else if (!e.shiftKey && (e.key === '=' || e.key === '+' || e.code === 'NumpadAdd')) {
       if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomIn) {
         e.preventDefault();
         state.editor.commands.zoomIn();
       }
-    }
-    else if (mod && !e.shiftKey && (e.key === '-' || e.code === 'NumpadSubtract')) {
+    } else if (!e.shiftKey && (e.key === '-' || e.code === 'NumpadSubtract')) {
       if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomOut) {
         e.preventDefault();
         state.editor.commands.zoomOut();
       }
-    }
-    else if (mod && !e.shiftKey && e.key === '0') {
+    } else if (!e.shiftKey && e.key === '0') {
       if (state.view === 'editor' && state.editor && state.editor.commands && state.editor.commands.zoomReset) {
         e.preventDefault();
         state.editor.commands.zoomReset();
       }
     }
-    else if (e.key === 'Escape' && !els.modalBackdrop.classList.contains('hidden')) closeModal(null);
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushAllDrafts();
+    if (document.visibilityState === 'hidden') {
+      flushAllDrafts();
+      persistSession();
+    }
   });
   /* The main process vetoes every close and waits on this handler, so anything
      that throws in here used to strand the window open for good: the title bar
@@ -3465,7 +4428,9 @@
   window.margo.onCloseRequest(async () => {
     try {
       try { window.margo.closeAck(true); } catch (err) { console.error('close: ack failed', err); }
+      try { closePalette(false); } catch {}
       try { syncActiveTab(); } catch (err) { console.error('close: syncActiveTab failed', err); }
+      try { persistSession(); } catch {}
       try { await flushAllDrafts(); } catch (err) { console.error('close: flushAllDrafts failed', err); }
 
       for (const t of [...state.tabs]) {
@@ -3497,15 +4462,23 @@
     if (window.pdfjsLib) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
     }
-    window.MargoMenubar.attach(els.menubar, menuSpec);
+    menubarApi = window.MargoMenubar.attach(els.menubar, menuSpec);
     applySidebarMode();
+    applySettings();
     applyTheme(await window.margo.theme.get(), false);
     refreshHeader();
     await refreshGoogle();
     await loadRecents();
     applyViewMode();
+    const smoke = !!(window.margo.isSmoke && window.margo.isSmoke());
     const recovered = await offerRecovery();
-    if (!recovered && await window.margo.firstRun()) {
+    let reopened = false;
+    if (!recovered && !smoke && settings.reopenSession) {
+      try { reopened = await restoreSession(); } catch { reopened = false; }
+    }
+    sessionLoaded = true;
+    persistSession();
+    if (!recovered && !reopened && await window.margo.firstRun()) {
       const sample = await window.margo.samplePath();
       const res = await window.margo.openPath(sample);
       if (res.ok) await mountDoc(res.doc);
@@ -3533,9 +4506,13 @@
       if (res.ok) {
         state.dirty = false;
         const t = findTab(state.activeTabId);
-        if (t) t.dirty = false;
+        if (t) {
+          t.dirty = false;
+          t.savedAt = Date.now();
+        }
         await clearDraft(t);
         syncActiveTab();
+        refreshSaveState(t);
         try { await window.margo.google.push({ path, name: state.doc.name }); } catch {}
       }
       return res;
@@ -3550,10 +4527,36 @@
     openModal,
     closeModal,
     showSettings,
+    showShortcuts,
     shareDoc,
     flushDrafts: flushAllDrafts,
     restoreDrafts: () => restoreDrafts(),
     discardDrafts: () => window.margo.drafts.clear(),
+    palette: {
+      open: openPalette,
+      close: closePalette,
+      isOpen: paletteIsOpen,
+      entries: () => paletteShown.map((e) => ({ type: e.type, label: e.label, detail: e.detail })),
+      fuzzy: fuzzyMatch
+    },
+    settings: {
+      get: () => ({ ...settings }),
+      update: updateSettings,
+      reload: () => { settings = readSettings(); applySettings(); return { ...settings }; },
+      key: SETTINGS_KEY
+    },
+    templates: () => TEMPLATES.map((t) => ({ id: t.id, kind: t.kind, label: t.label })),
+    newFromTemplate,
+    runAutosave,
+    saveTab,
+    findTab,
+    markTabDirty,
+    reloadTabFromDisk,
+    handleExternalChange,
+    persistSession,
+    restoreSession,
+    togglePin,
+    isPinned,
     thumbBackfill: {
       state: () => ({
         queued: thumbBackfillQueue.slice(),

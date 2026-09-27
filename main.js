@@ -466,11 +466,12 @@ function openDialogOptions() {
     title: 'Open a file',
     properties: ['openFile'],
     filters: [
-      { name: 'All supported', extensions: ['md', 'markdown', 'txt', 'docx', 'xlsx', 'csv', 'pdf'] },
+      { name: 'All supported', extensions: ['md', 'markdown', 'txt', 'docx', 'xlsx', 'csv', 'pptx', 'pdf'] },
       { name: 'Markdown', extensions: ['md', 'markdown', 'txt'] },
       { name: 'Word document', extensions: ['docx'] },
       { name: 'Excel workbook', extensions: ['xlsx'] },
       { name: 'CSV', extensions: ['csv'] },
+      { name: 'PowerPoint presentation', extensions: ['pptx'] },
       { name: 'PDF document', extensions: ['pdf'] },
       { name: 'All files', extensions: ['*'] }
     ]

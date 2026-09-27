@@ -2281,6 +2281,8 @@
         previewPane.addEventListener('scroll', onPreviewScroll);
         preview.addEventListener('click', onPreviewClick);
         preview.addEventListener('change', onPreviewChange);
+        /* pictures arriving late move everything under them */
+        preview.addEventListener('load', () => { syncDirty = true; }, true);
         preview.addEventListener('auxclick', (e) => { if (e.target.closest('a')) e.preventDefault(); });
         if (window.ResizeObserver) {
           resizeObs = new ResizeObserver(() => { syncDirty = true; if (findOpen) syncFindOverlayScroll(); });
@@ -2360,6 +2362,7 @@
         syncPoints: () => { buildSyncPoints(); return syncPoints ? syncPoints.length : 0; },
         scrollEditorTo: (y) => { textarea.scrollTop = y; onEditorScroll(); return previewPane.scrollTop; },
         previewPane: () => previewPane,
+        offsetY: (o) => offsetY(o),
         insertEmbeddedImage: (alt, url) => insertEmbeddedImage(alt, url),
         highlight: (code, lang) => Highlighter.highlight(code, lang)
       }

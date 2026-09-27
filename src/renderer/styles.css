@@ -497,7 +497,7 @@ kbd {
 /* command search trigger */
 .cmd-trigger {
   display: flex; align-items: center; gap: 8px;
-  width: clamp(180px, 22vw, 300px);
+  width: clamp(180px, 20vw, 280px);
   height: 30px; padding: 0 6px 0 10px;
   border-radius: var(--radius);
   background: var(--surface);
@@ -511,8 +511,13 @@ kbd {
 .cmd-trigger-icon svg { width: 15px; height: 15px; }
 .cmd-trigger-label { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmd-trigger-kbd { background: var(--bg-soft); border-color: var(--border); border-bottom-width: 1px; color: var(--text-faint); }
+/* Tabs get the room first: with several open the search collapses to its
+   icon and shortcut, and on a narrow window to the icon alone. */
+.titlebar.many-tabs .cmd-trigger { width: auto; padding: 0 6px 0 9px; }
+.titlebar.many-tabs .cmd-trigger-label { display: none; }
 @media (max-width: 1120px) {
   .cmd-trigger { width: 32px; padding: 0; justify-content: center; }
+  .titlebar.many-tabs .cmd-trigger { width: 32px; padding: 0; }
   .cmd-trigger-label, .cmd-trigger-kbd { display: none; }
 }
 
@@ -572,8 +577,9 @@ kbd {
   display: flex;
   align-items: center;
   gap: 7px;
-  flex: 0 1 190px;
-  min-width: 92px;
+  flex: 0 1 auto;
+  min-width: 96px;
+  max-width: 220px;
   height: var(--tabbar-h);
   padding: 0 6px 0 11px;
   font-size: 12.5px;
@@ -1144,13 +1150,13 @@ body.sidebar-resizing .sidebar { transition: none !important; }
 /* blank-document cards */
 .home-new-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 10px;
 }
 .home-new {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 11px;
   width: 100%; min-width: 0; height: 64px;
-  padding: 0 14px 0 12px;
+  padding: 0 12px;
   border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--surface);
   text-align: left;
@@ -1171,13 +1177,6 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .home-new-meta { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
-.home-new-plus {
-  margin-left: auto; flex: none; width: 22px; height: 22px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-faint); opacity: 0; transition: opacity 0.14s;
-}
-.home-new-plus svg { width: 14px; height: 14px; }
-.home-new:hover .home-new-plus { opacity: 1; }
 
 /* template gallery */
 .home-templates {
@@ -1643,7 +1642,7 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   margin-bottom: 12px; flex: none;
 }
 .modal-body { font-size: 13px; color: var(--text-soft); min-height: 0; }
-.modal-body input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]) {
+.modal-body input:where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"])) {
   width: 100%; height: 34px; padding: 0 11px; margin-top: 2px;
   border: 1px solid var(--border-strong); border-radius: var(--radius);
   background: var(--bg); font-size: 13px; color: var(--text);
@@ -1653,7 +1652,8 @@ body.sidebar-resizing .sidebar { transition: none !important; }
   border-color: var(--focus-ring, var(--accent));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring, var(--accent)) 22%, transparent);
 }
-.modal-body .search-field input { height: 100%; margin: 0; border: none; box-shadow: none; background: transparent; }
+.modal-body .search-field input,
+.modal-body .search-field input:focus { height: 100%; margin: 0; border: none; box-shadow: none; background: transparent; }
 .modal-lead { font-size: 13.5px; color: var(--text); line-height: 1.5; }
 .modal-lead strong { font-weight: 650; }
 .modal-detail { margin-top: 8px; font-size: 12.5px; color: var(--text-soft); line-height: 1.5; }
@@ -1707,6 +1707,7 @@ body.sidebar-resizing .sidebar { transition: none !important; }
 .settings-nav button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm), 0 0 0 1px var(--border); }
 .settings-pages { overflow-y: auto; padding: 18px 24px 24px; }
 .settings-page { display: flex; flex-direction: column; gap: 4px; }
+.settings-page[hidden] { display: none; }
 .settings-page h4 {
   font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-faint); margin: 14px 0 4px;
@@ -1935,3 +1936,9 @@ body.sidebar-resizing .sidebar { transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ============ platform chrome ============ */
+/* macOS draws its traffic lights over the left of the titlebar and has no
+   window-controls overlay on the right. */
+:root[data-platform="darwin"] .titlebar { padding-left: 80px; }
+:root[data-platform="darwin"] .titlebar-overlay-space { width: 10px; }

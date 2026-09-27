@@ -144,7 +144,7 @@
       const blobUrl = URL.createObjectURL(blob);
       const img = new Image();
       let settled = false;
-      const done = (url) => {
+      let done = (url) => {
         if (settled) return;
         settled = true;
         URL.revokeObjectURL(blobUrl);
@@ -164,7 +164,9 @@
       };
       img.onerror = () => done(null);
       img.src = blobUrl;
-      setTimeout(() => done(null), SVG_TIMEOUT);
+      const timer = setTimeout(() => done(null), SVG_TIMEOUT);
+      const settle = done;
+      done = (url) => { clearTimeout(timer); settle(url); };
     });
   }
 
@@ -282,8 +284,9 @@
 
   async function pdfThumb(bytes) {
     if (!window.pdfjsLib) return null;
+    let doc = null;
     try {
-      const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+      doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
       const page = await doc.getPage(1);
       const vp1 = page.getViewport({ scale: 1 });
       const scale = (INNER.w * 1.5) / vp1.width;
@@ -296,7 +299,10 @@
       ctx.fillRect(0, 0, c.width, c.height);
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
       const pageUrl = c.toDataURL('image/jpeg', 0.82);
-      doc.destroy();
+      /* Released on every path now: a page that failed to render used to
+         leave the whole parsed PDF (and its worker-side copy) alive. */
+      try { doc.destroy(); } catch {}
+      doc = null;
 
       const k = KINDS.pdf;
       const drawW = INNER.w;
@@ -311,7 +317,11 @@
         `<image href="${pageUrl}" x="${INNER.x}" y="${INNER.y}" width="${drawW}" height="${drawH}" preserveAspectRatio="xMidYMin meet"/>` +
         `</svg>`;
       return svgToPng(svg);
-    } catch { return null; }
+    } catch {
+      return null;
+    } finally {
+      if (doc) { try { doc.destroy(); } catch {} }
+    }
   }
 
   /* Generate + persist a thumbnail for a saved document. data = editor data (fresh) */
@@ -330,6 +340,9 @@
       } else if (doc.kind === 'pdf') {
         const bytes = data && data.bytes ? data.bytes : await window.margo.readBinary(doc.path);
         url = await pdfThumb(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      } else if (doc.kind === 'slides' && window.MargoSlides) {
+        // The presentation editor draws its own card (first slides, stacked).
+        url = await window.MargoSlides.thumbDataUrl((data && data.deck) || doc.deck);
       }
       if (url) await window.margo.setThumb(doc.path, url);
       return url;

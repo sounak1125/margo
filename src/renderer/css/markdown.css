@@ -112,7 +112,8 @@
 .md-wrap.mode-write .md-input { background: var(--surface); }
 .md-input::placeholder { color: var(--text-faint); }
 .md-input::selection { background: var(--sel-bg); }
-.md-pane-preview { position: relative; overflow-y: auto; background: var(--surface); }
+.md-pane-preview { display: block; position: relative; overflow-y: auto; background: var(--surface); }
+.md-wrap.mode-write .md-pane-preview { display: none; }
 .md-wrap.mode-read .md-pane-preview { background: var(--surface); }
 
 /* ---------- preview typography ---------- */
