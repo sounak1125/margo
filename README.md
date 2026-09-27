@@ -99,7 +99,7 @@ npm run check:desktop-thumbs -- --open   # opens a sample DOCX folder in Explore
 
 ## Notes & limits
 
-- Excel **formulas are not preserved** — Margo reads computed values and saves plain values.
+- Excel **formulas, number formats, cell styles, merges, frozen panes, conditional formats and validation round-trip**; pivot tables, macros and embedded Excel charts are not preserved.
 - Word **fonts/colors apply and export to .docx**, but reopening a .docx re-derives clean semantic content (mammoth), so exotic styling from other apps may be simplified.
 - PDF **text is not editable** (view, sign, extract) — that's true of every JS PDF stack; signatures & images are the supported edits.
 - Legacy `.doc` / `.xls` binaries aren’t supported (convert to `.docx` / `.xlsx` first).

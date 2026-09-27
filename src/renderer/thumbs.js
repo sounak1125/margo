@@ -253,7 +253,8 @@
     for (let r = 0; r < rowsN; r++) {
       const row = (sheet.rows && sheet.rows[r]) || [];
       for (let c = 0; c < cols; c++) {
-        const v = row[c] != null ? String(row[c]) : '';
+        const shown = sheet.display && sheet.display[r + ',' + c];
+        const v = shown != null ? String(shown) : row[c] != null ? String(row[c]) : '';
         if (!v) continue;
         const x = gx + c * colW + 6;
         const y = gy + headH + r * rowH + rowH / 2 + 1;
