@@ -125,7 +125,9 @@ function runCss(r) {
    painting text the wrong colour. */
 function readDirectFormatting(xml) {
   const colors = [];
-  const runRe = /<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
+  // Self-closing <w:r/> and <w:p/> count too: mammoth's model has them, and
+  // one uncounted empty paragraph abandoned every correlation below.
+  const runRe = /<w:r(?:\s[^>]*?)?\/>|<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
   let m;
   const runShades = [];
   while ((m = runRe.exec(xml))) {
@@ -142,7 +144,7 @@ function readDirectFormatting(xml) {
   const rules = [];
   const lines = [];
   const shades = [];
-  const paraRe = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  const paraRe = /<w:p(?:\s[^>]*?)?\/>|<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
   while ((m = paraRe.exec(xml))) {
     const s = /<w:spacing[^>]*w:line="(\d+)"[^>]*\/?>/.exec(m[0]);
     const rule = /<w:spacing[^>]*w:lineRule="([a-z]+)"/i.exec(m[0]);
@@ -711,7 +713,18 @@ async function htmlToDocxBuffer(bodyHtml, title, layout = {}) {
   const headerHtml = hasHeader ? '<p>header</p>' : null;
   const footerHtml = hasFooter ? '<p>footer</p>' : null;
 
-  const buf = await HTMLtoDOCX(htmlString, headerHtml, docOpts, footerHtml);
+  let buf;
+  try {
+    buf = await HTMLtoDOCX(htmlString, headerHtml, docOpts, footerHtml);
+  } catch (err) {
+    /* html-to-docx throws on markup it cannot model (odd table geometry,
+       exotic CSS). Losing some formatting beats refusing to save: retry
+       with the styling taken off tables and cells. */
+    const safe = htmlString
+      .replace(/<(table|td|th|col|colgroup|tr)\b([^>]*?)\sstyle="[^"]*"/gi, '<$1$2')
+      .replace(/<colgroup\b[\s\S]*?<\/colgroup>/gi, '');
+    buf = await HTMLtoDOCX(safe, headerHtml, docOpts, footerHtml);
+  }
   const done = await fidelity.finishDocx(Buffer.isBuffer(buf) ? buf : Buffer.from(buf), prep, {
     extraPass: (xml) => (xml.indexOf(STRIKE_ON) >= 0 ? applyStrikeFences(xml) : xml),
     headerText: layout.headerText || '',

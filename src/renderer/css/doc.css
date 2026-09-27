@@ -438,6 +438,7 @@
 }
 .doc-page-body::selection,
 .doc-page-body *::selection { background: var(--sel-bg); }
+.doc-page-body img::selection { background: transparent; }
 ::highlight(margo-cross-sel) { background-color: var(--sel-bg); }
 .doc-pages.is-painting .doc-page-body { cursor: copy; }
 
@@ -614,9 +615,9 @@
   width: 24px;
   height: 22px;
   border-radius: var(--radius-xs, 4px);
-  color: var(--text-faint);
+  color: var(--text-soft);
 }
-.doc-find-opt svg { width: 15px; height: 15px; }
+.doc-find-opt svg { width: 16px; height: 16px; }
 .doc-find-opt:hover { color: var(--text); background: var(--hover, var(--bg-soft)); }
 .doc-find-opt.active { color: var(--accent-ink); background: var(--accent-soft); }
 :root[data-scheme="dark"] .doc-find-opt.active { color: var(--accent-strong); }
@@ -662,6 +663,9 @@ mark.margo-find-hit.margo-find-current {
 .doc-outline-rail { left: 0; width: 260px; border-right: 1px solid var(--border); }
 .doc-comments-rail.hidden,
 .doc-outline-rail.hidden { display: none; }
+/* An open rail moves the pages over instead of covering them. */
+.editor-host.doc-comments-open .doc-pages { padding-right: calc(min(320px, 42vw) + 16px); }
+.editor-host.doc-outline-open .doc-pages { padding-left: 276px; }
 .doc-rail-head {
   display: flex;
   align-items: center;

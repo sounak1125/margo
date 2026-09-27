@@ -108,6 +108,19 @@ async function backendTests(samplesDir, tmpDir) {
       `${back.length} vs ${back2.length}`);
   } catch (e) { t('backend: docx round trip', false, e.stack || e.message); }
 
+  // Percentage cell widths used to throw inside html-to-docx and fail the save.
+  try {
+    const tHtml = '<table style="width:100%"><colgroup><col style="width:70%"><col style="width:30%"></colgroup>' +
+      '<tbody><tr><td style="width:40%">a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></tbody></table><p>end</p>';
+    const tb = await files.htmlToDocxBuffer(tHtml, 't', {});
+    const tp = path.join(tmpDir, 'colwidths.docx');
+    await fsp.writeFile(tp, tb);
+    const txml = await (await JSZip.loadAsync(tb)).file('word/document.xml').async('string');
+    t('backend: docx saves percentage table widths', (txml.match(/<w:tblGrid>/g) || []).length === 1);
+    const tback = (await files.openPath(tp)).html;
+    t('backend: docx round trip keeps column widths', /<colgroup><col style="width:\d/.test(tback), tback.slice(0, 200));
+  } catch (e) { t('backend: docx percentage table widths', false, e.message); }
+
   // A foreign document without page numbers must not gain them on open.
   try {
     const plainBuf = await files.htmlToDocxBuffer('<p>x</p>', 'x', { footerText: 'Only text', showPageNumbers: false });

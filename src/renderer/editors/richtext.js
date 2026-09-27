@@ -640,6 +640,7 @@
     /* Several DOM edits that the author sees as one action are recorded as
        one undo step. */
     function batch(fn) {
+      if (typingSince && !batchDepth) flushTypingWork();
       batchDepth++;
       let result;
       try { result = fn(); }
@@ -648,16 +649,35 @@
       return result;
     }
 
-    function undo() {
+    function docText() {
+      return pageBodies().map((b) => b.textContent).join('');
+    }
+
+    /* After undo or redo the caret goes to where the text changed - the
+       end of what came back, or the place something was taken out - so
+       the author sees what happened. A change that left the text alone
+       (formatting, a table border) keeps the caret from the snapshot. */
+    function stepHistory(dir) {
       flushTypingWork();
       hideImageOverlay();
-      if (history.undo(restoreDoc)) ctx.markDirty();
+      const before = docText();
+      const moved = dir < 0 ? history.undo(restoreDoc) : history.redo(restoreDoc);
+      if (!moved) return;
+      ctx.markDirty();
+      const after = docText();
+      if (after === before) return;
+      let start = 0;
+      const max = Math.min(before.length, after.length);
+      while (start < max && before[start] === after[start]) start++;
+      let tail = 0;
+      while (tail < max - start && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
+      const pos = Math.max(start, after.length - tail);
+      restoreSelectionOffsets({ start: pos, end: pos });
+      rememberSelection();
     }
-    function redo() {
-      flushTypingWork();
-      hideImageOverlay();
-      if (history.redo(restoreDoc)) ctx.markDirty();
-    }
+
+    function undo() { stepHistory(-1); }
+    function redo() { stepHistory(1); }
 
     /* ---------- selection ----------
        A toolbar control takes focus (a select, a picker, a modal) and the
@@ -689,6 +709,9 @@
     }
 
     function ensureSelection() {
+      /* Typing still waiting for its undo step gets it now, so the command
+         that follows is undone on its own rather than with the typing. */
+      if (typingSince && !batchDepth) flushTypingWork();
       const sel = window.getSelection();
       if (sel && sel.rangeCount) {
         const r = sel.getRangeAt(0);
@@ -1401,6 +1424,7 @@
     }
 
     function onChecklistPointerDown(e) {
+      if (viewMode === 'read') return false;
       const li = e.target && e.target.closest && e.target.closest('ul.margo-checklist > li');
       if (!li || !pagesRoot.contains(li)) return false;
       const rect = li.getBoundingClientRect();
@@ -2284,6 +2308,15 @@
       const at = sel.getRangeAt(0);
       const tail = document.createRange();
       tail.setStart(at.startContainer, at.startOffset);
+      // Inside a table (or a generated block) the break goes after it, as
+      // in Word, rather than cutting the table in two.
+      const atEl = at.startContainer.nodeType === 1 ? at.startContainer : at.startContainer.parentElement;
+      const whole = atEl && atEl.closest('table, .margo-toc, .margo-footnotes');
+      if (whole && body.contains(whole)) {
+        let top = whole;
+        while (top.parentElement && top.parentElement !== body) top = top.parentElement;
+        tail.setStartAfter(top);
+      }
       tail.setEnd(body, body.childNodes.length);
       // Split at the top-level block so the new page starts with a whole one.
       const frag = tail.extractContents();
@@ -4257,6 +4290,7 @@
       if (!outlineRail) return;
       const open = force != null ? force : outlineRail.classList.contains('hidden');
       outlineRail.classList.toggle('hidden', !open);
+      if (hostEl) hostEl.classList.toggle('doc-outline-open', open);
       if (open) renderOutline();
     }
 
@@ -4733,7 +4767,11 @@
         });
         let n;
         while ((n = walker.nextNode())) {
-          const block = closestBlock(n, body) || body;
+          // Table cells are their own paragraphs: "Rope" and "3" in
+          // neighbouring cells must not read as "Rope3".
+          const pe = n.parentElement;
+          const cell = pe && pe.closest('td, th');
+          const block = closestBlock(n, body) || (cell && body.contains(cell) ? cell : null) || body;
           if (block !== currentBlock || !current) {
             current = { nodes: [], text: '' };
             groups.push(current);
@@ -5340,7 +5378,10 @@
       return !!(r && !r.collapsed && r.toString().trim());
     }
 
-    async function pasteFromClipboard() {
+    /* Paste from a menu or the right-click menu. The clipboard is read whole,
+       so formatting and pictures come along; the text the shell already read
+       is the fallback when the richer read is refused. */
+    async function pasteFromClipboard(fallbackText) {
       ensureSelection();
       restoreSelection();
       let html = '';
@@ -5360,6 +5401,8 @@
       } catch {
         try { text = await navigator.clipboard.readText(); } catch { /* denied or empty */ }
       }
+      if (!html && !text && fallbackText) text = fallbackText;
+      if (destroyed) return;
       if (html) { insertHtmlAtCaret(cleanPastedHtml(html)); return; }
       if (!text) return;
       const asHtml = plainTextToHtml(text);
@@ -6038,6 +6081,12 @@
         insertTextAtCaret('    ');
         return;
       }
+      if (k === 'Enter' && e.target && e.target.closest && e.target.closest('.margo-footnotes li')) {
+        // A footnote is one paragraph; Enter starts a new line within it.
+        handled();
+        execRaw('insertLineBreak');
+        return;
+      }
       if (k === 'Enter' && !mod && !e.shiftKey) {
         const list = currentList();
         if (list && list.classList.contains('margo-checklist')) {
@@ -6454,12 +6503,7 @@
         copy: () => execClipboardCommand('copy'),
         cut: () => execClipboardCommand('cut'),
         selectAll: () => selectAllDocument(),
-        paste: (t) => {
-          if (!t) { pasteFromClipboard(); return; }
-          const asHtml = plainTextToHtml(t);
-          if (asHtml) insertHtmlAtCaret(asHtml);
-          else insertTextAtCaret(t);
-        },
+        paste: (t) => pasteFromClipboard(t),
         addPage: () => addPage(),
         pageBreak: () => insertPageBreak(),
         find: () => openFind(false),

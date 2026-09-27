@@ -356,6 +356,27 @@ function prepareDocxHtml(html, opts) {
         });
       }
     });
+    /* html-to-docx throws on a cell width it cannot turn into twips (a
+       percentage, an em) and the whole save fails; widths are made pixels
+       of the page's text width here, and anything else is dropped. */
+    const contentPx = contentTw / 15;
+    table.querySelectorAll('td, th, col').forEach((c) => {
+      if (c.closest('table') !== table) return;
+      const w = styleOf(c, 'width') || c.getAttribute('width') || '';
+      c.removeAttribute('width');
+      if (!w) return;
+      let px = null;
+      if (/%$/.test(w)) px = parseFloat(w) / 100 * contentPx;
+      else {
+        const pt = cssLengthToPt(/^\d+(\.\d+)?$/.test(w) ? w + 'px' : w);
+        if (pt != null) px = pt / 0.75;
+      }
+      if (px != null && px > 4 && Number.isFinite(px)) c.style.setProperty('width', Math.round(px) + 'px');
+      else c.style.removeProperty('width');
+      if (!c.getAttribute('style')) c.removeAttribute('style');
+    });
+    const tw = styleOf(table, 'width');
+    if (tw && !/^(100%|\d+(\.\d+)?px)$/.test(tw)) table.style.setProperty('width', '100%');
     const mode = /\bmargo-tbl-none\b/.test(table.className || '') ? 'none'
       : /\bmargo-tbl-outer\b/.test(table.className || '') ? 'outer' : null;
     const first = table.querySelector('td, th');
@@ -678,8 +699,10 @@ function applyStructureFences(xml, directives) {
 
 function tidyTables(xml) {
   let x = xml;
-  // html-to-docx writes a tblGrid per row group; the schema allows one.
+  // html-to-docx writes a tblGrid per row group (and one for a colgroup);
+  // the schema allows one, straight after the table properties.
   x = x.replace(/(<\/w:tr>)\s*<w:tblGrid>[\s\S]*?<\/w:tblGrid>/g, '$1');
+  x = x.replace(/(<w:tblGrid>[\s\S]*?<\/w:tblGrid>)(?:\s*<w:tblGrid>[\s\S]*?<\/w:tblGrid>)+/g, '$1');
   // A vertically merged continuation cell gets gridSpan 0, which is invalid.
   x = x.replace(/<w:gridSpan w:val="0"\/>/g, '');
   // Grid columns from the first row's cell widths, when it has them all.
@@ -860,6 +883,7 @@ function readImportExtras(xml) {
   }
 
   const tables = [];
+  const colWidths = [];
   const tre = /<w:tbl>/g;
   while ((m = tre.exec(xml || ''))) {
     const b = tableBounds(xml, m.index + 1);
@@ -879,8 +903,11 @@ function readImportExtras(xml) {
         && !cellB.some((c) => edges(c).some((e) => !isNil(e)))) mode = 'outer';
     }
     tables.push(mode);
+    const grid = (/<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/.exec(tbl) || [])[1] || '';
+    const cols = (grid.match(/<w:gridCol w:w="(\d+)"/g) || []).map((g) => +/(\d+)"/.exec(g)[1]);
+    colWidths.push(cols);
   }
-  return { images, tables };
+  return { images, tables, colWidths };
 }
 
 function postProcessImportedHtml(html, extras) {
@@ -910,6 +937,23 @@ function postProcessImportedHtml(html, extras) {
     tables.forEach((t, i) => {
       if (ex.tables[i] === 'none') t.classList.add('margo-tbl-none');
       else if (ex.tables[i] === 'outer') t.classList.add('margo-tbl-outer');
+      /* Column widths, as shares of the table, when they are not all equal
+         (equal columns are what the page draws anyway). */
+      const cols = (ex.colWidths && ex.colWidths[i]) || [];
+      const sum = cols.reduce((a, b) => a + b, 0);
+      const firstRow = t.querySelector('tr');
+      const slots = firstRow ? Array.from(firstRow.children).reduce((n, c) => n + (parseInt(c.getAttribute('colspan') || '1', 10) || 1), 0) : 0;
+      const uneven = cols.some((w) => Math.abs(w - cols[0]) > 20);
+      if (sum > 0 && cols.length > 1 && cols.length === slots && uneven && !t.querySelector('colgroup')) {
+        const cg = doc.createElement('colgroup');
+        cols.forEach((w) => {
+          const col = doc.createElement('col');
+          col.setAttribute('style', 'width:' + (w * 100 / sum).toFixed(2) + '%');
+          cg.appendChild(col);
+        });
+        t.insertBefore(cg, t.firstChild);
+        if (!t.getAttribute('style')) t.setAttribute('style', 'width:100%');
+      }
     });
   }
 
