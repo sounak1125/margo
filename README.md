@@ -1,6 +1,6 @@
 # Margo ✏️
 
-**A friendly home for your documents.** Margo reads and edits Markdown, Word, Excel, and PDF files in one clean app — Light, Dark, Paper, Graphite, or Ink themes. Fully offline.
+**A friendly home for your documents.** Margo reads and edits Markdown, Word, Excel, and PDF files in one clean app — Light, Dark, Paper, Graphite, or Ink themes. Fully offline, on Windows, macOS and Linux.
 
 *The name comes from “margin” — where all the good notes live. The pencil with the face is Margo herself.*
 
@@ -29,7 +29,11 @@ Markdown and Word documents also export to `.pdf` (File → Export as PDF).
 - **Updates** — installed copies check GitHub Releases on launch (Help → Settings, or Help → Check for updates…). `npm start` cannot auto-update.
 - **Share to Google Drive** (optional) — File → Share… uploads the open file as-is and lets you grant Viewer / Commenter / Editor to Google accounts. **File → Open from Drive…** lists the Margo folder and downloads a copy to Documents\Margo. Sign in from the titlebar avatar or Settings. The app still works fully offline if you never sign in.
 - Themed **Save changes?** prompt when closing with unsaved edits; shortcuts (`Ctrl+O/S/Shift+S`)
-- **Crash recovery** — unsaved edits are drafted locally (not over the original file); after a crash, Restore or Discard on next launch
+- **Crash recovery** — unsaved edits are drafted locally (not over the original file); after a crash, Restore or Discard on next launch. If the window itself stops responding or crashes, Margo offers to reload it, which brings the drafts back
+- **Files changed elsewhere** — when another program edits or deletes a document you have open, Margo notices (Margo's own saves never count)
+- **Export as PDF page setup** — A4 / Letter / Legal / A3 / A5 / Tabloid, portrait or landscape, margin presets or exact margins; Word documents default to their own page setup
+- **Remembers the window** — size, position and maximized state come back on the next launch (and are pulled back on screen if that display is gone)
+- **Safe saves** — every save writes a temporary file, flushes it to disk and renames it over the original, keeping the file's permissions and following symlinks
 
 ## Run
 
@@ -44,12 +48,19 @@ npm start
 npm test          # end-to-end smoke suite (isolated userData)
 ```
 
-## Build a Windows installer
+`npm test` runs on Windows, macOS and Linux. On Linux without a display it wraps Electron in `xvfb-run` automatically (install the `xvfb` package), and it exits non-zero when any check fails. `MARGO_SMOKE_LOG=run.log npm test` also keeps the full log; `MARGO_SMOKE_TIMEOUT_MS` caps the whole run (default 10 minutes).
+
+## Build installers
 
 ```bash
-npm run icons   # app + per-type Explorer icons
-npm run dist    # NSIS installer in dist/
+npm run icons          # app + per-type file icons (.ico, .icns, .png)
+npm run dist           # installer for the platform you are on, in dist/
+npm run dist -- --win  # Windows: NSIS installer
+npm run dist -- --mac  # macOS: .dmg + .zip (unsigned unless you configure signing)
+npm run dist -- --linux  # Linux: AppImage + .deb
 ```
+
+Each build registers Margo for `.md` `.markdown` `.txt` `.docx` `.xlsx` `.csv` `.pdf` (Explorer "Open with", Finder "Open With", the Linux desktop's MIME associations), and every file you open or save is added to the system's recent documents (Windows jump list, macOS Dock / File → Open Recent). Auto-update works for the Windows installer and the Linux AppImage; macOS and `.deb` builds update by downloading the new release.
 
 After install, Explorer shows branded icons for MD/DOC/XLS/PDF (not the pencil app icon). Saved Word files also embed a first-page thumbnail (Large / Extra large icons). If you still see the old pencil icon, rebuild/reinstall, then refresh the icon cache (e.g. restart Explorer or delete `%LocalAppData%\IconCache.db` and sign out).
 
@@ -60,7 +71,7 @@ Installed apps pull updates from [GitHub Releases](https://github.com/sounak1125
 1. Bump `"version"` in `package.json` so it matches the tag you will push (e.g. `1.4.0`).
 2. Commit the bump.
 3. Tag and push: `git tag v1.4.0` then `git push origin v1.4.0`.
-4. GitHub Actions builds the Windows NSIS installer and publishes a Release that includes the installer **and** `latest.yml` (required by the updater).
+4. GitHub Actions opens a draft Release, builds Windows (NSIS + `latest.yml`), macOS (dmg/zip + `latest-mac.yml`) and Linux (AppImage/deb + `latest-linux.yml`) into it, and publishes it once all three have built. The Linux job also runs the smoke suite first.
 
 On next launch, an installed Margo downloads the update in the background. When it is ready, users get a restart prompt (Help → Settings also has **Check for updates** / **Restart and install**). Installing a per-machine build may show a Windows UAC prompt — that is expected.
 
@@ -95,6 +106,10 @@ npm run check:desktop-thumbs -- --open   # opens a sample DOCX folder in Explore
 - CSV export writes the active sheet only (Margo tells you when it does).
 - **Google Drive share** is optional and offline-safe. Commenter access is Drive file comments, not in-app collaboration. Margo can only share or reopen files it uploaded (`drive.file` scope). Open from Drive downloads into Documents\Margo; Save updates Drive only when you are signed in and that file is already mapped.
 - **Desktop thumbnails:** typed Explorer icons require a **machine install** (`npm run dist`, `perMachine: true`). If every file shows the Margo pencil, the type icons did not register — reinstall and clear the icon cache. True live first-page previews for Markdown need a Windows shell extension (not shipped); PDF/XLSX use the OS handlers; DOCX embeds a preview image on save.
+
+## Security model
+
+The window runs sandboxed with context isolation and no Node.js; the page only reaches the system through the small API in `preload.js`. Main only reads or writes files the author handed to Margo — picked in an Open / Save / Export dialog, passed on the command line or by the OS ("Open With"), dragged into the window, listed in recents, or downloaded from Drive — so a malicious document cannot use Margo to read or overwrite other files, or upload them to Drive. Links open in the default browser (http, https and mailto only); nothing navigates the window away from Margo or opens pop-ups. Documents printed, exported or thumbnailed are rendered with JavaScript off under a Content-Security-Policy that blocks frames, objects and remote scripts. The Google refresh token is encrypted with the OS keychain where one exists, and stored owner-only otherwise.
 
 ## Stack
 

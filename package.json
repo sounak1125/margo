@@ -9,7 +9,7 @@
   "repository": "github:sounak1125/margo",
   "scripts": {
     "start": "node scripts/stamp-electron-icon.js && electron .",
-    "test": "node scripts/stamp-electron-icon.js && set MARGO_SMOKE=1&& electron .",
+    "test": "node scripts/smoke.js",
     "icons": "node scripts/make-icons.js",
     "check:desktop-thumbs": "node scripts/check-desktop-thumbs.js",
     "predist": "node scripts/write-google-oauth.js",
@@ -60,6 +60,36 @@
       "target": "nsis",
       "icon": "icon.ico"
     },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "icon.icns",
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Margo ${version}",
+      "icon": "icon.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "icon.png",
+      "category": "Office",
+      "executableName": "margo",
+      "synopsis": "Markdown, Word, Excel and PDF documents in one calm editor",
+      "description": "Margo reads and edits Markdown, Word, Excel and PDF files in one clean, offline app.",
+      "maintainer": "Sounak <sounak1125@users.noreply.github.com>",
+      "desktop": {
+        "StartupWMClass": "Margo"
+      }
+    },
     "publish": {
       "provider": "github",
       "owner": "sounak1125",
@@ -83,6 +113,7 @@
         "name": "MargoMarkdown",
         "description": "Markdown document",
         "icon": "file-icons/md.ico",
+        "mimeType": "text/markdown;text/x-markdown;text/plain",
         "role": "Editor"
       },
       {
@@ -90,6 +121,7 @@
         "name": "MargoWordDocument",
         "description": "Word document",
         "icon": "file-icons/doc.ico",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "role": "Editor"
       },
       {
@@ -100,6 +132,7 @@
         "name": "MargoSpreadsheet",
         "description": "Spreadsheet",
         "icon": "file-icons/sheet.ico",
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;text/csv",
         "role": "Editor"
       },
       {
@@ -107,7 +140,16 @@
         "name": "MargoPDF",
         "description": "PDF document",
         "icon": "file-icons/pdf.ico",
+        "mimeType": "application/pdf",
         "role": "Viewer"
+      },
+      {
+        "ext": "pptx",
+        "name": "MargoPresentation",
+        "description": "PowerPoint presentation",
+        "icon": "file-icons/slides.ico",
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "role": "Editor"
       }
     ]
   }

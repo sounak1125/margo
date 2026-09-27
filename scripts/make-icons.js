@@ -4,6 +4,7 @@ const path = require('path');
 const { Resvg } = require('@resvg/resvg-js');
 const pngToIco = require('png-to-ico');
 const sharp = require('sharp');
+const { buildIcns } = require('./icns');
 
 const assets = path.join(__dirname, '..', 'assets');
 const fileIconsDir = path.join(assets, 'file-icons');
@@ -157,6 +158,25 @@ function fileTypeSvg(kind) {
         font-family="Segoe UI, Arial, sans-serif">XLS</text>
 </svg>`;
   }
+  if (kind === 'slides') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#D0622F"/>
+  <path d="${pagePath()}" fill="#FFF8F3" stroke="#EDB293" stroke-width="4"/>
+  <path d="M150 28v44h44" fill="none" stroke="#EDB293" stroke-width="4"/>
+  <g transform="translate(70 88)">
+    <rect width="116" height="78" rx="8" fill="#FFFFFF" stroke="#D0622F" stroke-width="3"/>
+    <rect x="12" y="14" width="56" height="9" rx="4.5" fill="#D0622F"/>
+    <rect x="12" y="32" width="44" height="7" rx="3.5" fill="#EDB293"/>
+    <rect x="12" y="46" width="50" height="7" rx="3.5" fill="#EDB293"/>
+    <circle cx="90" cy="46" r="16" fill="#F2C4AC"/>
+    <path d="M90 30a16 16 0 0 1 16 16H90z" fill="#D0622F"/>
+  </g>
+  <rect x="70" y="182" width="78" height="36" rx="10" fill="#A8441B"/>
+  <text x="109" y="207" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="800"
+        font-family="Segoe UI, Arial, sans-serif">PPT</text>
+</svg>`;
+  }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
   <rect width="256" height="256" rx="52" fill="#E0554A"/>
@@ -175,7 +195,8 @@ const FILE_KINDS = [
   { name: 'md', aliases: ['md', 'markdown', 'txt'] },
   { name: 'doc', aliases: ['docx'] },
   { name: 'sheet', aliases: ['xlsx', 'csv'] },
-  { name: 'pdf', aliases: ['pdf'] }
+  { name: 'pdf', aliases: ['pdf'] },
+  { name: 'slides', aliases: ['pptx'] }
 ];
 
 (async () => {
@@ -189,12 +210,17 @@ const FILE_KINDS = [
     fs.writeFileSync(path.join(assets, 'icon.png'), png512);
     const appIco = await pngToIco(await Promise.all(icoSizes.map((s) => resizePng(master, s))));
     fs.writeFileSync(path.join(assets, 'icon.ico'), appIco);
-    console.log('icons written from icon-ai.png: icon.png (512), icon.ico (256..16)');
+    // macOS app icon; the master is only upscaled as far as 512.
+    const meta = await sharp(master).metadata();
+    const icns = await buildIcns((size) => (size <= Math.max(512, meta.width || 0) ? resizePng(master, size) : null));
+    fs.writeFileSync(path.join(assets, 'icon.icns'), icns);
+    console.log('icons written from icon-ai.png: icon.png (512), icon.ico (256..16), icon.icns');
   } else {
     fs.writeFileSync(path.join(assets, 'icon.png'), renderSvgPng(appSvg, 512));
     const appIco = await pngToIco(icoSizes.map((s) => renderSvgPng(appSvg, s)));
     fs.writeFileSync(path.join(assets, 'icon.ico'), appIco);
-    console.log('icons written from icon.svg: icon.png (512), icon.ico (256..16)');
+    fs.writeFileSync(path.join(assets, 'icon.icns'), await buildIcns((size) => renderSvgPng(appSvg, size)));
+    console.log('icons written from icon.svg: icon.png (512), icon.ico (256..16), icon.icns');
   }
 
   // Per-type Explorer icons (paths used by electron-builder fileAssociations)
@@ -205,6 +231,8 @@ const FILE_KINDS = [
     fs.writeFileSync(pngPath, renderSvgPng(svg, 256));
     const ico = await pngToIco([256, 128, 64, 48, 32, 16].map((s) => renderSvgPng(svg, s)));
     fs.writeFileSync(path.join(fileIconsDir, `${k.name}.ico`), ico);
+    // macOS document icons (electron-builder swaps .ico for .icns there).
+    fs.writeFileSync(path.join(fileIconsDir, `${k.name}.icns`), await buildIcns((size) => (size <= 512 ? renderSvgPng(svg, size) : null)));
     // electron-builder also looks for `${ext}.ico` in buildResources
     for (const alias of k.aliases || []) {
       fs.writeFileSync(path.join(assets, `${alias}.ico`), ico);

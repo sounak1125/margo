@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld('margo', {
   saveAs: (req) => ipcRenderer.invoke('file:save-as', req),
   saveImage: (req) => ipcRenderer.invoke('image:save-as', req),
   exportImagesFolder: (req) => ipcRenderer.invoke('images:export-folder', req),
+  // req: { kind, data, suggestedName, currentPath?, path?, page? } -
+  // page: { size: 'A4' | 'Letter' | 'Legal' | 'A3' | 'A5' | 'Tabloid' |
+  // 'Executive' | { width, height } (inches), landscape: boolean,
+  // margins: 'none' | 'narrow' | 'moderate' | 'normal' | 'wide' | inches |
+  // { top, right, bottom, left } (inches) }. Resolves { ok, path, page }.
   exportPdf: (req) => ipcRenderer.invoke('export:pdf', req),
   print: (req) => ipcRenderer.invoke('print:document', req),
   quit: () => ipcRenderer.invoke('app:quit'),
@@ -50,9 +55,28 @@ contextBridge.exposeInMainWorld('margo', {
   closeNow: () => ipcRenderer.invoke('app:close-now'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
+  /* The path of a File the author dropped or picked. Main only lets the
+     renderer open paths the author handed Margo, and a real File object is
+     exactly that (a page cannot construct one with a path), so the path is
+     registered with main here before it is returned. */
   pathForFile: (file) => {
-    try { return webUtils.getPathForFile(file); } catch { return null; }
+    let p = null;
+    try { p = webUtils.getPathForFile(file); } catch { return null; }
+    if (!p) return null;
+    try { return ipcRenderer.sendSync('file:grant-dropped', p) || null; } catch { return null; }
   },
+
+  /* Files changed on disk by another program. main watches every file opened
+     or saved through file:open / file:save / file:save-as; the renderer
+     should unwatch when it closes the tab, and may (re)watch a path it holds
+     some other way (a restored draft). The callback gets
+     { path, kind: 'changed' | 'deleted' | 'created' }. Margo's own saves
+     never trigger it. */
+  watchFile: (p) => ipcRenderer.invoke('file:watch', p),
+  unwatchFile: (p) => ipcRenderer.invoke('file:unwatch', p),
+  onFileChangedExternally: (cb) => on('file:changed-externally', cb),
+
+  platform: process.platform,
 
   updates: {
     status: () => ipcRenderer.invoke('updates:status'),
@@ -84,3 +108,11 @@ contextBridge.exposeInMainWorld('margo', {
     report: (results) => ipcRenderer.invoke('smoke:report', results)
   }
 });
+
+/* Lets the stylesheet make room for platform chrome (macOS traffic lights sit
+   where Windows/Linux have nothing) without any script in the page. */
+try {
+  const mark = () => { document.documentElement.dataset.platform = process.platform; };
+  if (document.documentElement) mark();
+  else window.addEventListener('DOMContentLoaded', mark, { once: true });
+} catch {}
